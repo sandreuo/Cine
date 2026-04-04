@@ -673,7 +673,7 @@ button {
 }
 
 .movie-detail-poster {
-  width: 140px;
+  width: 180px;
   flex-shrink: 0;
   border-radius: var(--radius);
   overflow: hidden;
@@ -681,7 +681,8 @@ button {
   border: 1px solid var(--border);
 }
 
-@media (min-width: 640px) { .movie-detail-poster { width: 180px; } }
+@media (min-width: 640px) { .movie-detail-poster { width: 260px; } }
+@media (min-width: 1024px) { .movie-detail-poster { width: 300px; } }
 
 .movie-detail-info h1 {
   font-size: clamp(1.5rem, 4vw, 2.5rem);
