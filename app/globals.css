@@ -496,10 +496,12 @@ button {
 }
 
 @keyframes clapper {
-  0% { transform: rotate(0deg); }
-  20% { transform: rotate(-30deg); }
-  35% { transform: rotate(0deg); }
-  100% { transform: rotate(0deg); }
+  0% { transform: rotate(-35deg); }
+  20% { transform: rotate(-35deg); }
+  25% { transform: rotate(0deg); } /* SNAP SHUT! */
+  80% { transform: rotate(0deg); } 
+  85% { transform: rotate(-35deg); }
+  100% { transform: rotate(-35deg); }
 }
 
 @keyframes pulse {
