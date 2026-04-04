@@ -16,25 +16,23 @@ if (!TMDB_API_KEY) {
 async function tmdbFetch(endpoint: string, params: Record<string, string> = {}) {
   const url = new URL(`${TMDB_BASE}${endpoint}`);
   url.searchParams.set('api_key', TMDB_API_KEY);
-  url.searchParams.set('language', 'es-419'); // Latin American Spanish
+  url.searchParams.set('language', 'es-419');
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`TMDB ${res.status}: ${url}`);
   return res.json();
 }
 
-async function enrichMovie(id: number, title: string) {
-  // Search by title
+async function enrichMovie(id: number, title: string): Promise<number | null> {
   const search = await tmdbFetch('/search/movie', { query: title, region: 'CO' });
   const result = search.results?.[0];
   if (!result) {
     console.log(`   ⚠️  No encontrada en TMDB: ${title}`);
-    return;
+    return null;
   }
 
-  // Get full details + videos in one call
-  const details = await tmdbFetch(`/movie/${result.id}`, { append_to_response: 'videos' });
+  const tmdbId: number = result.id;
+  const details = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: 'videos' });
 
   const poster = details.poster_path ? `${POSTER_BASE}${details.poster_path}` : null;
   const description: string = details.overview || null;
@@ -42,31 +40,93 @@ async function enrichMovie(id: number, title: string) {
   const genres: string[] = details.genres?.map((g: any) => g.name) ?? [];
   const release_date: string | null = details.release_date || null;
 
-  // Find best YouTube trailer (prefer official, prefer Spanish)
   const videos: any[] = details.videos?.results ?? [];
   const trailer =
-    videos.find((v) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es') ??
-    videos.find((v) => v.type === 'Trailer' && v.site === 'YouTube') ??
-    videos.find((v) => v.site === 'YouTube');
+    videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es') ??
+    videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube') ??
+    videos.find((v: any) => v.site === 'YouTube');
   const trailerId: string | null = trailer?.key ?? null;
 
-  const { error } = await supabase
-    .from('movies')
-    .update({
-      poster_url: poster,
-      description,
-      duration_minutes: duration,
-      genres,
-      trailer_youtube_id: trailerId,
-      release_date,
-    })
-    .eq('id', id);
+  const { error } = await supabase.from('movies').update({
+    tmdb_id: tmdbId,
+    poster_url: poster,
+    description,
+    duration_minutes: duration,
+    genres,
+    trailer_youtube_id: trailerId,
+    release_date,
+  }).eq('id', id);
 
   if (error) {
     console.error(`   ❌ Error actualizando ${title}:`, error.message);
-  } else {
-    console.log(`   ✅ ${title} — poster: ${poster ? '✓' : '✗'}, trailer: ${trailerId ? '✓' : '✗'}`);
+    return null;
   }
+
+  console.log(`   ✅ ${title} (tmdb:${tmdbId}) — poster: ${poster ? '✓' : '✗'}, trailer: ${trailerId ? '✓' : '✗'}`);
+  return tmdbId;
+}
+
+// Merge duplicate movies that share the same tmdb_id.
+// Keeps the one with the lowest id, reassigns screenings, deletes duplicates.
+async function deduplicateByTmdbId() {
+  console.log('\n🔍 Deduplicando por TMDB ID...');
+
+  const { data: all } = await supabase
+    .from('movies')
+    .select('id, title, tmdb_id')
+    .not('tmdb_id', 'is', null)
+    .order('id', { ascending: true });
+
+  if (!all || all.length === 0) {
+    console.log('   Nada que deduplicar.');
+    return;
+  }
+
+  // Group by tmdb_id
+  const groups: Record<number, typeof all> = {};
+  for (const m of all) {
+    const tid = m.tmdb_id as number;
+    groups[tid] ??= [];
+    groups[tid].push(m);
+  }
+
+  let merged = 0;
+  for (const [tmdbId, movies] of Object.entries(groups)) {
+    if (movies.length <= 1) continue;
+
+    // Keep lowest id (first scraper to find it), merge rest into it
+    const [canonical, ...duplicates] = movies;
+    console.log(`   🔗 tmdb:${tmdbId} — manteniendo "${canonical.title}" (id:${canonical.id}), eliminando ${duplicates.length} duplicado(s):`);
+
+    for (const dup of duplicates) {
+      console.log(`      - "${dup.title}" (id:${dup.id})`);
+
+      // Reassign screenings
+      const { error: scErr } = await supabase
+        .from('screenings')
+        .update({ movie_id: canonical.id })
+        .eq('movie_id', dup.id);
+
+      if (scErr) {
+        console.error(`      ❌ Error reasignando screenings de ${dup.id}:`, scErr.message);
+        continue;
+      }
+
+      // Delete duplicate movie
+      const { error: delErr } = await supabase
+        .from('movies')
+        .delete()
+        .eq('id', dup.id);
+
+      if (delErr) {
+        console.error(`      ❌ Error eliminando película ${dup.id}:`, delErr.message);
+      } else {
+        merged++;
+      }
+    }
+  }
+
+  console.log(`   ✅ ${merged} duplicado(s) eliminado(s).`);
 }
 
 export async function enrichWithTMDB() {
@@ -74,7 +134,7 @@ export async function enrichWithTMDB() {
 
   const { data: movies, error } = await supabase
     .from('movies')
-    .select('id, title');
+    .select('id, title, tmdb_id');
 
   if (error || !movies) {
     console.error('❌ Error leyendo películas:', error?.message);
@@ -84,14 +144,21 @@ export async function enrichWithTMDB() {
   console.log(`   ${movies.length} películas para enriquecer`);
 
   for (const movie of movies) {
+    // Skip if already has tmdb_id (avoid redundant API calls on every run)
+    if ((movie as any).tmdb_id) {
+      console.log(`   ⏭  ${movie.title} — ya tiene tmdb_id, saltando`);
+      continue;
+    }
     try {
       await enrichMovie(movie.id, movie.title);
-      // Small delay to respect TMDB rate limit (40 req/10s)
       await new Promise((r) => setTimeout(r, 300));
     } catch (err) {
-      console.error(`   ❌ Error en TMDB para "${movie.title}":`, err);
+      console.error(`   ❌ Error TMDB "${movie.title}":`, err);
     }
   }
+
+  // Deduplicate after enrichment
+  await deduplicateByTmdbId();
 
   console.log('✅ Enriquecimiento TMDB finalizado.');
 }

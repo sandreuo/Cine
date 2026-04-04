@@ -16,6 +16,7 @@ export type Movie = {
   rating: string | null;
   genres: string[] | null;
   release_date: string | null;
+  tmdb_id: number | null;
 };
 
 export type Cinema = {
