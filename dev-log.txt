@@ -1,0 +1,73 @@
+
+> cinehoy@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.5
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+Attention: Next.js now collects completely anonymous telemetry regarding usage.
+This information is used to shape Next.js' roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://nextjs.org/telemetry
+
+ ✓ Ready in 4.2s
+ ○ Compiling / ...
+ ✓ Compiled / in 5.5s (664 modules)
+ GET / 500 in 8397ms
+ ○ Compiling /[ciudad] ...
+ ✓ Compiled /[ciudad] in 828ms (652 modules)
+ GET / 500 in 294ms
+ GET /favicon.ico 200 in 1185ms
+ GET /favicon.ico 500 in 818ms
+ GET / 500 in 497ms
+ GET /favicon.ico 500 in 402ms
+ ✓ Compiled /_not-found in 134ms (655 modules)
+ GET /movie/1 404 in 169ms
+ GET /favicon.ico 500 in 429ms
+ GET /favicon.ico 500 in 747ms
+ GET /favicon.ico 500 in 515ms
+ GET / 500 in 278ms
+ GET /favicon.ico 500 in 547ms
+ GET /movie/scream-7 404 in 16ms
+ GET /favicon.ico 500 in 1290ms
+ GET /api/movies 404 in 20ms
+ GET /favicon.ico 500 in 1462ms
+ ✓ Compiled in 208ms (655 modules)
+ GET /api/movies 404 in 43ms
+ GET /favicon.ico 200 in 858ms
+ GET / 200 in 294ms
+ GET /favicon.ico 200 in 210ms
+ ○ Compiling /pelicula/[slug] ...
+ ✓ Compiled /pelicula/[slug] in 1500ms (669 modules)
+ GET /pelicula/scream-7 200 in 3075ms
+ GET /favicon.ico 200 in 209ms
+ GET /bogota 200 in 344ms
+ GET /favicon.ico 200 in 208ms
+ GET /api/movies 404 in 72ms
+ GET /favicon.ico 200 in 223ms
+ GET / 200 in 276ms
+ GET /favicon.ico 200 in 260ms
+ ○ Compiling /robots.txt ...
+ ✓ Compiled /robots.txt in 1187ms (395 modules)
+ GET /robots.txt 200 in 1423ms
+ GET /favicon.ico 200 in 445ms
+ ○ Compiling /sitemap.xml ...
+ ✓ Compiled /sitemap.xml in 1501ms (439 modules)
+ GET /sitemap.xml 200 in 2809ms
+ GET /favicon.ico 200 in 292ms
+ GET / 200 in 264ms
+ GET /favicon.ico 200 in 247ms
+ GET / 200 in 753ms
+ GET /favicon.ico 200 in 246ms
+ GET /favicon.ico 200 in 218ms
+ GET /favicon.ico 200 in 1345ms
+ GET /barranquilla 200 in 250ms
+ GET /favicon.ico 200 in 209ms
+ GET /favicon.ico 200 in 233ms
+ ✓ Compiled in 1782ms (680 modules)
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 646ms (669 modules)
+ GET /api/movies 404 in 234ms
+ GET /favicon.ico 200 in 701ms
