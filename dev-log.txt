@@ -96,3 +96,4 @@ https://nextjs.org/telemetry
  GET /favicon.ico 200 in 2133ms
  ✓ Compiled in 313ms (671 modules)
  ✓ Compiled in 354ms (671 modules)
+ ✓ Compiled in 226ms (657 modules)

@@ -212,6 +212,20 @@ export default function HomeClient({
         <div className="ad-slot ad-slot-banner" aria-label="Publicidad" />
       </div>
 
+      {/* HOW TO USE / DESCRIPTION */}
+      <section style={{ padding: '0 0 24px', textAlign: 'center' }}>
+        <div className="container">
+          <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', maxWidth: '600px', margin: '0 auto' }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--gold)', marginBottom: '4px' }}>
+              ⚡️ Arma tu plan de cine en segundos
+            </h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Filtra por ciudad o ubicación, elige tu película, compara horarios entre cines y envíale la invitación armada a tus amigos por WhatsApp al instante.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* MOVIES */}
       <section style={{ paddingBottom: '32px' }}>
         <div className="container">
