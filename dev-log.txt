@@ -97,3 +97,10 @@ https://nextjs.org/telemetry
  ✓ Compiled in 313ms (671 modules)
  ✓ Compiled in 354ms (671 modules)
  ✓ Compiled in 226ms (657 modules)
+ ✓ Compiled in 449ms (685 modules)
+  ▲ Next.js 14.2.5
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1504ms

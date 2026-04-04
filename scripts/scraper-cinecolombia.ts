@@ -1,9 +1,8 @@
 import { chromium } from 'playwright';
 import { supabase } from '../lib/supabase';
-import crypto from 'crypto';
 
 export async function scrapeCineColombia() {
-  console.log('🎬 Iniciando scraper de CINE COLOMBIA...');
+  console.log('🎬 Iniciando scraper REAL de CINE COLOMBIA...');
   
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -12,41 +11,55 @@ export async function scrapeCineColombia() {
   
   try {
     const page = await context.newPage();
-    console.log('Navegando a Cine Colombia Cartelera...');
-    await page.goto('https://www.cinecolombia.com/bogota/cartelera', { waitUntil: 'load', timeout: 30000 });
+    // We go to Bogota as a baseline for posters/metadata
+    const url = 'https://www.cinecolombia.com/bogota/cartelera';
+    console.log(`Navegando a ${url}...`);
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
     
-    // Simulate scraping logic (Basic fallback for MVP)
-    const titles = ['El Gato con Botas', 'Avatar: El Camino del Agua', 'M3GAN'];
+    // Extract __NEXT_DATA__
+    const nextDataStr = await page.evaluate(() => {
+      const script = document.getElementById('__NEXT_DATA__');
+      return script ? script.textContent : null;
+    });
+
+    if (!nextDataStr) {
+      throw new Error('No se encontró __NEXT_DATA__ en Cine Colombia');
+    }
+
+    const nextData = JSON.parse(nextDataStr);
+    const movies = nextData.props?.pageProps?.movies || [];
     
-    // Inject logic
-    for (const title of titles) {
-      console.log(`[Cine Colombia] Encontrada película: ${title}`);
-      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-      
-      const { data: movie } = await supabase.from('movies').upsert({
+    console.log(`Encontradas ${movies.length} películas en Cine Colombia.`);
+
+    for (const m of movies) {
+      const title = m.title;
+      const slug = m.slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const poster = m.poster_url || m.poster;
+      const description = m.synopsis || m.description;
+      const duration = m.duration;
+      const rating = m.rating;
+      const genres = m.genres?.map((g: any) => g.name || g) || [];
+      const trailer = m.trailer_url;
+      const trailerId = trailer?.includes('v=') ? trailer.split('v=')[1]?.split('&')[0] : trailer?.split('/').pop();
+
+      console.log(`Procesando: ${title}`);
+
+      await supabase.from('movies').upsert({
         slug,
         title,
-        poster_url: 'https://image.tmdb.org/t/p/w500/vJU3rXSP9hwUuLeq8IpfsJShLOk.jpg',
-        trailer_url: 'https://youtube.com/watch?v=123',
-        synopsis: 'Disfruta en Cine Colombia.',
-        duration: '120 min',
-        rating: 'PG-13',
-        genres: ['Acción', 'Fantasía'],
-        release_date: new Date().toISOString().split('T')[0]
-      }).select().single();
-
-      if (movie) {
-        // Insert dummy screenings
-        await supabase.from('screenings').upsert({
-          id: crypto.randomUUID(),
-          movie_id: movie.id,
-          // cinema_id will be random or handled by orchestrator later
-        });
-      }
+        poster_url: poster,
+        trailer_youtube_id: trailerId,
+        description,
+        duration_minutes: parseInt(duration) || 0,
+        rating,
+        genres
+      }, { onConflict: 'slug' });
     }
+
+    console.log('✅ Cine Colombia Scraper finalizado con éxito.');
     
   } catch (err) {
-    console.error('Error en Cine Colombia Scraper:', err);
+    console.error('❌ Error fatal en Cine Colombia Scraper:', err);
   } finally {
     await browser.close();
   }

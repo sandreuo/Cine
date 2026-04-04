@@ -151,19 +151,18 @@ export default async function MoviePage({ params }: { params: { slug: string } }
                   <p>Aún no tenemos los horarios de esta película para el día de hoy.</p>
                 </div>
               ) : (
-                <div className="cinema-group">
-                  <div className="cinema-group-header">
-                    <div>
-                      <div className="cinema-group-name">Cines con funciones</div>
-                      <div className="cinema-group-address">Los horarios se obtienen automáticamente de las cadenas.</div>
+                <div className="cinema-group-list" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {screenings.map((s: any) => (
+                    <div key={s.id} className="cinema-group" style={{ padding: '16px', border: '1px solid var(--border)', borderRadius: '12px' }}>
+                      <div className="cinema-group-header">
+                        <div className="cinema-group-name">{s.cinemas?.name}</div>
+                        <div className="cinema-group-address">{s.cinemas?.cities?.name} — {s.format} | {s.language}</div>
+                      </div>
+                      <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+                         <span className="time-badge">{new Date(s.start_time).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
+                      </div>
                     </div>
-                  </div>
-                  <div className="cinema-group-body">
-                    {/* Simulated data visualization grouping since db is mainly empty for now */}
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      Para la v1, el sistema cargará los cines y horarios automáticamente mediante robots conectados a Cinépolis, Cine Colombia, Cinemark y Procinal en las horas de la madrugada.
-                    </p>
-                  </div>
+                  ))}
                 </div>
               )}
             </div>
