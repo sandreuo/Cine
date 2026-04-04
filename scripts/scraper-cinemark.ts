@@ -1,4 +1,4 @@
-import { chromium, Route, Request } from 'playwright';
+import { chromium } from 'playwright';
 import { supabaseAdmin as supabase } from '../lib/supabase-admin';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -19,36 +19,23 @@ async function getOrCreateCity(slug: string): Promise<number | null> {
   if (data) return data.id;
   const name = slug.charAt(0).toUpperCase() + slug.slice(1);
   const { data: created, error } = await supabase
-    .from('cities')
-    .insert({ slug, name })
-    .select('id')
-    .single();
+    .from('cities').insert({ slug, name }).select('id').single();
   if (error) { console.error('Error creando ciudad:', error.message); return null; }
   return created?.id ?? null;
 }
 
-async function getOrCreateCinema(
-  name: string,
-  cityId: number,
-  address?: string
-): Promise<number | null> {
+async function getOrCreateCinema(name: string, cityId: number, address?: string): Promise<number | null> {
   const { data } = await supabase
-    .from('cinemas')
-    .select('id')
-    .eq('name', name)
-    .eq('city_id', cityId)
-    .single();
+    .from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
   if (data) return data.id;
   const { data: created, error } = await supabase
-    .from('cinemas')
-    .insert({ name, city_id: cityId, chain: 'cinemark', address: address ?? null })
-    .select('id')
-    .single();
+    .from('cinemas').insert({ name, city_id: cityId, chain: 'cinemark', address: address ?? null })
+    .select('id').single();
   if (error) { console.error('Error creando cine:', error.message); return null; }
   return created?.id ?? null;
 }
 
-// Cinemark Colombia cities and their URL slugs
+// Cinemark Colombia city URL slugs
 const CITIES: Record<string, string> = {
   bogota: 'bogota',
   medellin: 'medellin',
@@ -63,44 +50,123 @@ export async function scrapeCinemark() {
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   });
 
-  // Intercept Cinemark API calls to capture showtime data
-  let capturedApiData: any[] = [];
-
   try {
+    // Cinemark has one national billboard page; city filter is applied client-side
+    // We scrape the global page once and get all movies+cinemas from __NEXT_DATA__
+    const capturedApiData: any[] = [];
+    const page = await context.newPage();
+
+    await page.route('**/*', async (route, request) => {
+      const url = request.url();
+      if (request.method() === 'GET' &&
+        (url.includes('/api/') || url.includes('graphql') ||
+         url.includes('movies') || url.includes('showtimes') ||
+         url.includes('billboard') || url.includes('cinemark'))) {
+        const response = await route.fetch();
+        const ct = response.headers()['content-type'] ?? '';
+        if (ct.includes('application/json')) {
+          try {
+            const body = await response.json();
+            capturedApiData.push({ url, body });
+          } catch { /* ignore */ }
+        }
+        await route.fulfill({ response });
+      } else {
+        await route.continue();
+      }
+    });
+
+    try {
+      await page.goto('https://www.cinemark.com.co/', {
+        waitUntil: 'networkidle', timeout: 45000,
+      });
+    } catch {
+      await page.goto('https://www.cinemark.com.co/', {
+        waitUntil: 'domcontentloaded', timeout: 30000,
+      });
+    }
+    await page.waitForTimeout(4000);
+
+    const nextDataStr = await page.evaluate(() => {
+      const el = document.getElementById('__NEXT_DATA__');
+      return el?.textContent ?? null;
+    });
+
+    if (nextDataStr) {
+      const nd = JSON.parse(nextDataStr);
+      const pp = nd?.props?.pageProps ?? {};
+      console.log(`   __NEXT_DATA__ pageProps keys: ${Object.keys(pp).join(', ')}`);
+
+      // PremieresBillboard is the actual cartelera data — log first item structure
+      const premiereBillboard = pp.PremieresBillboard;
+      if (premiereBillboard) {
+        const sample = Array.isArray(premiereBillboard)
+          ? premiereBillboard[0]
+          : typeof premiereBillboard === 'object' ? premiereBillboard : null;
+        if (sample) console.log(`   PremieresBillboard sample keys: ${Object.keys(sample).join(', ')}`);
+      }
+
+      // Try all known Cinemark data paths
+      const movies: any[] =
+        (Array.isArray(pp.PremieresBillboard) ? pp.PremieresBillboard : []) ||
+        pp.PremieresBillboard?.movies ||
+        pp.PremieresBillboard?.Films ||
+        pp.PremieresBillboard?.films ||
+        pp.movies ?? pp.billboard?.movies ?? [];
+
+      console.log(`   ${movies.length} películas en __NEXT_DATA__`);
+
+      for (const m of movies) {
+        await processMovieGlobal(m);
+      }
+    }
+
+    // Process intercepted API responses — these may have showtime+cinema data
+    for (const { url, body } of capturedApiData) {
+      const movies: any[] =
+        body?.movies ?? body?.data?.movies ?? body?.Films ?? body?.films ??
+        body?.results ?? (Array.isArray(body) ? body : []);
+
+      if (movies.length > 0) {
+        console.log(`   ${movies.length} películas en API: ${url.substring(0, 70)}`);
+        // Try to find cinema context from URL
+        const citySlug = Object.keys(CITIES).find(c => url.toLowerCase().includes(c)) ?? '';
+        const cityId = citySlug ? await getOrCreateCity(citySlug) : null;
+
+        for (const m of movies) {
+          if (cityId) {
+            await processMovie(m, cityId);
+          } else {
+            await processMovieGlobal(m);
+          }
+        }
+      }
+    }
+
+    await page.unroute('**/*');
+    await page.close();
+
+    // Per-city pages for showtimes
     for (const [citySlug, dbSlug] of Object.entries(CITIES)) {
-      console.log(`\n📍 Scrapeando Cinemark en: ${dbSlug}`);
+      console.log(`\n📍 Funciones Cinemark en: ${dbSlug}`);
       const cityId = await getOrCreateCity(dbSlug);
       if (!cityId) continue;
 
-      capturedApiData = [];
-      const page = await context.newPage();
+      const cityPage = await context.newPage();
+      const cityApiData: any[] = [];
 
-      // Intercept API responses from Cinemark's backend
-      await page.route('**/*', async (route: Route, request: Request) => {
+      await cityPage.route('**/*', async (route, request) => {
         const url = request.url();
-        const isApiCall =
-          url.includes('/api/') ||
-          url.includes('graphql') ||
-          url.includes('/movies') ||
-          url.includes('/showtimes') ||
-          url.includes('/billboard') ||
-          url.includes('/cartelera');
-
-        if (isApiCall && request.method() === 'GET') {
+        if (request.method() === 'GET' &&
+          (url.includes('/api/') || url.includes('showtimes') || url.includes('horarios') ||
+           url.includes('billboard') || url.includes('schedule'))) {
           const response = await route.fetch();
-          const contentType = response.headers()['content-type'] ?? '';
-          if (contentType.includes('application/json')) {
-            try {
-              const body = await response.json();
-              capturedApiData.push({ url, body });
-              console.log(`   📡 API interceptada: ${url.substring(0, 80)}`);
-            } catch {
-              // Not JSON, ignore
-            }
+          const ct = response.headers()['content-type'] ?? '';
+          if (ct.includes('application/json')) {
+            try { cityApiData.push({ url, body: await response.json() }); } catch { /* ignore */ }
           }
           await route.fulfill({ response });
         } else {
@@ -109,178 +175,135 @@ export async function scrapeCinemark() {
       });
 
       try {
-        await page.goto(`https://www.cinemark.com.co/cartelera?ciudad=${citySlug}`, {
-          waitUntil: 'networkidle',
-          timeout: 45000,
+        // Try city-specific URL formats
+        await cityPage.goto(`https://www.cinemark.com.co/cartelera/${citySlug}`, {
+          waitUntil: 'domcontentloaded', timeout: 25000,
         });
-      } catch {
-        // networkidle may timeout on heavy pages; try domcontentloaded as fallback
-        try {
-          await page.goto(`https://www.cinemark.com.co/`, {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000,
-          });
-        } catch (e) {
-          console.error(`   ❌ No se pudo cargar Cinemark para ${dbSlug}:`, e);
-          await page.close();
-          continue;
-        }
-      }
+        await cityPage.waitForTimeout(3000);
 
-      await page.waitForTimeout(3000);
+        const cityNd = await cityPage.evaluate(() => {
+          const el = document.getElementById('__NEXT_DATA__');
+          return el?.textContent ?? null;
+        });
 
-      // Try __NEXT_DATA__ first
-      const nextDataStr = await page.evaluate(() => {
-        const el = document.getElementById('__NEXT_DATA__');
-        return el?.textContent ?? null;
-      });
+        if (cityNd) {
+          const nd = JSON.parse(cityNd);
+          const pp = nd?.props?.pageProps ?? {};
+          console.log(`   ${dbSlug} __NEXT_DATA__ keys: ${Object.keys(pp).join(', ')}`);
 
-      if (nextDataStr) {
-        const nd = JSON.parse(nextDataStr);
-        const pp = nd?.props?.pageProps ?? {};
-        console.log(`   __NEXT_DATA__ pageProps keys: ${Object.keys(pp).join(', ')}`);
+          // Check for showtime data in city page
+          const showtimes: any[] =
+            (Array.isArray(pp.PremieresBillboard) ? pp.PremieresBillboard : []) ||
+            pp.showtimes ?? pp.Showtimes ?? [];
 
-        const movies: any[] =
-          pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.initialData?.movies ?? [];
-
-        console.log(`   ${movies.length} películas en __NEXT_DATA__`);
-
-        for (const m of movies) {
-          await processMovie(m, cityId);
-        }
-      }
-
-      // Process any captured API data
-      for (const { url, body } of capturedApiData) {
-        const movies: any[] =
-          body?.movies ??
-          body?.data?.movies ??
-          body?.billboard?.movies ??
-          body?.results ??
-          (Array.isArray(body) ? body : []);
-
-        if (movies.length > 0) {
-          console.log(`   ${movies.length} películas en API ${url.substring(0, 60)}`);
-          for (const m of movies) {
-            await processMovie(m, cityId);
+          for (const s of showtimes) {
+            await processShowtime(s, cityId, dbSlug);
           }
         }
-      }
 
-      // DOM fallback: scrape movie cards directly
-      const domMovies = await page.evaluate(() => {
-        const results: any[] = [];
-        const cards = document.querySelectorAll(
-          '.movie-card, article.pelicula, [class*="movie"], [class*="film"], [class*="pelicula"]'
-        );
-        cards.forEach((card) => {
-          const titleEl = card.querySelector('h2, h3, h4, [class*="title"], [class*="titulo"]');
-          const title = titleEl?.textContent?.trim() ?? '';
-          const imgEl = card.querySelector('img');
-          const poster = imgEl?.src ?? imgEl?.getAttribute('data-src') ?? null;
-          const link = card.querySelector('a');
-          const href = link?.href ?? null;
-          if (title) results.push({ title, poster, href });
-        });
-        return results;
-      });
-
-      if (domMovies.length > 0) {
-        console.log(`   ${domMovies.length} películas encontradas en DOM`);
-        for (const dm of domMovies) {
-          if (!dm.title) continue;
-          const slug = slugify(dm.title);
-          await supabase.from('movies').upsert(
-            { slug, title: dm.title, poster_url: dm.poster },
-            { onConflict: 'slug' }
-          );
+        // Process city-level API data
+        for (const { url, body } of cityApiData) {
+          const movies: any[] =
+            body?.movies ?? body?.Films ?? body?.films ??
+            body?.results ?? (Array.isArray(body) ? body : []);
+          if (movies.length > 0) {
+            console.log(`   ${movies.length} items en API ciudad: ${url.substring(0, 70)}`);
+            for (const m of movies) await processMovie(m, cityId);
+          }
         }
+      } catch (e) {
+        console.error(`   ❌ Error en ciudad ${dbSlug}:`, e);
+      } finally {
+        await cityPage.unroute('**/*');
+        await cityPage.close();
       }
-
-      await page.unroute('**/*');
-      await page.close();
     }
 
-    console.log('\n✅ Cinemark Scraper finalizado.');
   } catch (err) {
     console.error('❌ Error fatal en Cinemark Scraper:', err);
   } finally {
     await browser.close();
+    console.log('\n✅ Cinemark Scraper finalizado.');
   }
 }
 
-async function processMovie(m: any, cityId: number) {
-  const title: string = m.title ?? m.nombre ?? m.name ?? '';
+async function processMovieGlobal(m: any) {
+  const title: string = m.title ?? m.Title ?? m.nombre ?? m.name ?? '';
   if (!title) return;
-
   const slug = m.slug ?? slugify(title);
-  const poster = m.poster_url ?? m.poster ?? m.image ?? null;
-  const description = m.synopsis ?? m.description ?? m.sinopsis ?? null;
-  const duration = parseInt(m.duration ?? m.duracion ?? '0') || null;
-  const rating = m.rating ?? m.clasificacion ?? null;
-  const genres: string[] = (m.genres ?? m.generos ?? []).map(
-    (g: any) => g?.name ?? g?.nombre ?? g ?? ''
+  await supabase.from('movies').upsert(
+    {
+      slug, title,
+      poster_url: m.poster_url ?? m.poster ?? m.PosterUrl ?? m.image ?? null,
+      description: m.synopsis ?? m.description ?? m.Synopsis ?? null,
+      duration_minutes: parseInt(m.duration ?? m.Duration ?? m.duracion ?? '0') || null,
+      rating: m.rating ?? m.Rating ?? m.clasificacion ?? null,
+      genres: (m.genres ?? m.Genres ?? m.generos ?? []).map((g: any) => g?.name ?? g?.Name ?? g ?? ''),
+    },
+    { onConflict: 'slug' }
   );
+}
 
-  console.log(`   🎥 Procesando: ${title}`);
+async function processMovie(m: any, cityId: number) {
+  const title: string = m.title ?? m.Title ?? m.nombre ?? m.name ?? '';
+  if (!title) return;
+  const slug = m.slug ?? slugify(title);
 
-  const { data: movie, error: movieErr } = await supabase
-    .from('movies')
-    .upsert(
-      { slug, title, poster_url: poster, description, duration_minutes: duration, rating, genres },
-      { onConflict: 'slug' }
-    )
-    .select('id')
-    .single();
+  const { data: movie } = await supabase.from('movies').upsert(
+    {
+      slug, title,
+      poster_url: m.poster_url ?? m.poster ?? m.PosterUrl ?? m.image ?? null,
+      description: m.synopsis ?? m.description ?? m.Synopsis ?? null,
+      duration_minutes: parseInt(m.duration ?? m.Duration ?? m.duracion ?? '0') || null,
+      rating: m.rating ?? m.Rating ?? m.clasificacion ?? null,
+      genres: (m.genres ?? m.Genres ?? m.generos ?? []).map((g: any) => g?.name ?? g?.Name ?? g ?? ''),
+    },
+    { onConflict: 'slug' }
+  ).select('id').single();
 
-  if (movieErr || !movie) {
-    console.error(`   ❌ Error guardando ${title}:`, movieErr?.message);
-    return;
-  }
+  if (!movie) return;
 
-  // Process showings if embedded in the movie object
-  const showings: any[] =
-    m.showings ?? m.screenings ?? m.functions ?? m.showtimes ?? m.horarios ?? [];
-
+  const showings: any[] = m.showings ?? m.Showings ?? m.screenings ?? m.functions ?? m.showtimes ?? m.Showtimes ?? [];
   for (const showing of showings) {
-    const cinemaName: string =
-      showing.cinema?.name ??
-      showing.cinema?.nombre ??
-      showing.theater?.name ??
-      showing.name ??
-      '';
-    if (!cinemaName) continue;
+    await processShowtime(showing, cityId, '', movie.id);
+  }
+}
 
-    const cinemaId = await getOrCreateCinema(cinemaName, cityId);
-    if (!cinemaId) continue;
+async function processShowtime(showing: any, cityId: number, _citySlug: string, movieIdOverride?: number) {
+  const cinemaName: string = showing.cinema?.name ?? showing.Cinema?.Name ?? showing.theater?.name ?? showing.CinemaName ?? showing.name ?? '';
+  if (!cinemaName) return;
+  const cinemaId = await getOrCreateCinema(cinemaName, cityId);
+  if (!cinemaId) return;
 
-    const schedules: any[] =
-      showing.schedules ?? showing.horarios ?? showing.times ?? (showing.time ? [showing] : []);
+  // Resolve movie if not overridden
+  let movieId = movieIdOverride;
+  if (!movieId) {
+    const title = showing.movie?.title ?? showing.Movie?.Title ?? showing.movieTitle ?? '';
+    if (!title) return;
+    const slug = slugify(title);
+    const { data: m } = await supabase.from('movies').upsert({ slug, title }, { onConflict: 'slug' }).select('id').single();
+    movieId = m?.id;
+  }
+  if (!movieId) return;
 
-    for (const sched of schedules) {
-      const rawTime: string =
-        sched.time ?? sched.hora ?? sched.start_time ?? sched.datetime ?? '';
-      if (!rawTime) continue;
+  const schedules: any[] = showing.schedules ?? showing.Schedules ?? showing.horarios ?? (showing.time ? [showing] : []);
+  const today = new Date().toISOString().split('T')[0];
 
-      let startTime: string;
-      if (/^\d{1,2}:\d{2}$/.test(rawTime)) {
-        const today = new Date().toISOString().split('T')[0];
-        startTime = `${today}T${rawTime.padStart(5, '0')}:00`;
-      } else {
-        startTime = rawTime;
-      }
+  for (const sched of schedules) {
+    const rawTime: string = sched.time ?? sched.Time ?? sched.hora ?? sched.start_time ?? sched.StartTime ?? '';
+    if (!rawTime) continue;
+    const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
+      ? `${today}T${rawTime.padStart(5, '0')}:00`
+      : rawTime;
 
-      await supabase.from('screenings').upsert(
-        {
-          movie_id: movie.id,
-          cinema_id: cinemaId,
-          start_time: startTime,
-          format: sched.format ?? sched.formato ?? '2D',
-          language: sched.language ?? sched.idioma ?? 'subtitulada',
-          buy_url: sched.buy_url ?? sched.url ?? null,
-        },
-        { onConflict: 'movie_id,cinema_id,start_time' }
-      );
-    }
+    await supabase.from('screenings').upsert(
+      {
+        movie_id: movieId, cinema_id: cinemaId, start_time: startTime,
+        format: sched.format ?? sched.Format ?? sched.formato ?? '2D',
+        language: sched.language ?? sched.Language ?? sched.idioma ?? 'subtitulada',
+        buy_url: null,
+      },
+      { onConflict: 'movie_id,cinema_id,start_time' }
+    );
   }
 }

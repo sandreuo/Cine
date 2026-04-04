@@ -74,10 +74,29 @@ async function getOrCreateCinema(
 export async function scrapeCineColombia() {
   console.log('🎬 Iniciando scraper REAL de CINE COLOMBIA...');
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+    ],
+  });
   const context = await browser.newContext({
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    extraHTTPHeaders: {
+      'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
+    },
+    locale: 'es-CO',
+    timezoneId: 'America/Bogota',
+  });
+  // Hide automation signals
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
   try {
@@ -88,11 +107,46 @@ export async function scrapeCineColombia() {
 
       // ── 1. Cartelera page: get movie list ──────────────────────────────
       const cartelera = await context.newPage();
+      const capturedApiData: any[] = [];
+
+      // Intercept their API calls (may expose billboard+showtimes directly)
+      await cartelera.route('**/*', async (route, request) => {
+        const url = request.url();
+        if (request.method() === 'GET' &&
+          (url.includes('/api/') || url.includes('graphql') ||
+           url.includes('billboard') || url.includes('cartelera') ||
+           url.includes('movies') || url.includes('showtimes'))) {
+          const response = await route.fetch();
+          const ct = response.headers()['content-type'] ?? '';
+          if (ct.includes('application/json')) {
+            try { capturedApiData.push({ url, body: await response.json() }); } catch { /* ignore */ }
+          }
+          await route.fulfill({ response });
+        } else {
+          await route.continue();
+        }
+      });
+
       const billboardUrl = `https://www.cinecolombia.com/${ccSlug}/cartelera`;
       console.log(`   Navegando a ${billboardUrl}`);
-      await cartelera.goto(billboardUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      try {
+        await cartelera.goto(billboardUrl, { waitUntil: 'networkidle', timeout: 60000 });
+      } catch {
+        await cartelera.goto(billboardUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      }
+      await cartelera.waitForTimeout(4000);
 
-      await cartelera.waitForTimeout(3000);
+      // Log page title to detect if Cloudflare blocked us
+      const pageTitle = await cartelera.title();
+      console.log(`   Título de página: "${pageTitle}"`);
+
+      // Process any intercepted API data first
+      for (const { url, body } of capturedApiData) {
+        const movies: any[] = body?.movies ?? body?.data?.movies ?? body?.billboard?.movies ?? (Array.isArray(body) ? body : []);
+        if (movies.length > 0) {
+          console.log(`   📡 ${movies.length} películas en API: ${url.substring(0, 70)}`);
+        }
+      }
 
       const nextDataStr = await cartelera.evaluate(() => {
         const el = document.getElementById('__NEXT_DATA__');
