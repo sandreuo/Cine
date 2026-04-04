@@ -181,7 +181,7 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
                 }}>
                   {sedeCount} sede{sedeCount !== 1 ? 's' : ''} · {totalFunctions} funciones
                 </span>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: '4px' }}>
+                <span style={{ color: 'var(--gold)', fontSize: '0.8rem', marginLeft: '4px' }}>
                   {chainCollapsed ? '▶' : '▼'}
                 </span>
               </button>
@@ -212,11 +212,11 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
                             {sedeName}
                           </h4>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {cityName && <span className="cinema-location">{cityName.toUpperCase()}</span>}
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                            {cityName && <span className="cinema-location" style={{ color: 'var(--text-secondary)' }}>{cityName.toUpperCase()}</span>}
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
                               {sedeTotal} func.
                             </span>
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                            <span style={{ color: 'var(--gold)', fontSize: '0.75rem' }}>
                               {sedeCollapsed ? '▶' : '▼'}
                             </span>
                           </div>
