@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import HomeClient from './HomeClient';
+import SEOContent from '@/components/SEOContent';
 
 export const revalidate = 3600; // Revalidate every hour
 
@@ -32,6 +33,7 @@ export default async function HomePage({
           cities={cities || []}
           searchQuery={searchParams.q || ''}
         />
+        <SEOContent />
       </main>
       <Footer />
     </>
