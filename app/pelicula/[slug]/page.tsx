@@ -144,7 +144,11 @@ export default async function MoviePage({ params }: { params: { slug: string } }
           <section className="screenings-section">
             <h2 className="section-title">Horarios y Funciones</h2>
             <div style={{ marginTop: '24px' }}>
-              <ScreeningsClient screenings={screenings || []} />
+              <ScreeningsClient
+                screenings={screenings || []}
+                movieTitle={movie.title}
+                movieSlug={movie.slug}
+              />
             </div>
           </section>
         </div>
