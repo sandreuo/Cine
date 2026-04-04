@@ -122,8 +122,6 @@ export default async function MoviePage({ params }: { params: { slug: string } }
 
         {/* CONTENT */}
         <div className="container">
-          {/* Ad Slot */}
-          <div className="ad-slot ad-slot-banner" aria-label="Publicidad" />
 
           {/* Trailer */}
           {movie.trailer_youtube_id && movie.trailer_youtube_id.length > 5 && (

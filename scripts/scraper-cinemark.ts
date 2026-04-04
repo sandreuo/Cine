@@ -115,7 +115,7 @@ export async function scrapeCinemark() {
         pp.PremieresBillboard?.movies ||
         pp.PremieresBillboard?.Films ||
         pp.PremieresBillboard?.films ||
-        pp.movies ?? pp.billboard?.movies ?? [];
+        (pp.movies ?? pp.billboard?.movies ?? []);
 
       console.log(`   ${movies.length} películas en __NEXT_DATA__`);
 
@@ -194,7 +194,7 @@ export async function scrapeCinemark() {
           // Check for showtime data in city page
           const showtimes: any[] =
             (Array.isArray(pp.PremieresBillboard) ? pp.PremieresBillboard : []) ||
-            pp.showtimes ?? pp.Showtimes ?? [];
+            (pp.showtimes ?? pp.Showtimes ?? []);
 
           for (const s of showtimes) {
             await processShowtime(s, cityId, dbSlug);

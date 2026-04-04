@@ -207,10 +207,6 @@ export default function HomeClient({
         </div>
       </section>
 
-      {/* AD SLOT */}
-      <div className="container">
-        <div className="ad-slot ad-slot-banner" aria-label="Publicidad" />
-      </div>
 
       {/* HOW TO USE / DESCRIPTION */}
       <section style={{ padding: '0 0 24px', textAlign: 'center' }}>
