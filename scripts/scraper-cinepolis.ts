@@ -16,7 +16,7 @@ const CITY_SLUGS_CINEPOLIS: Record<string, string> = {
   'medellin-colombia': 'medellin',
 };
 
-async function scrapeCinepolis() {
+export async function scrapeCinepolis() {
   console.log('🎬 Iniciando scraper de Cinépolis Colombia...');
 
   const browser = await chromium.launch({ headless: true });
@@ -46,9 +46,6 @@ async function scrapeCinepolis() {
 
       const moviesData = await page.evaluate(() => {
         const results: any[] = [];
-        
-        // Find cinema locations (Complexes)
-        const complexes = document.querySelectorAll('.cartelera-complejo'); // Adjust selector as needed, but Cinepolis usually groups by cinema
         
         // If they use a different structure (e.g. articles), we parse globally.
         // This is a generic heuristic selector since we don't have the exact DOM.
@@ -114,4 +111,3 @@ async function scrapeCinepolis() {
   }
 }
 
-scrapeCinepolis();

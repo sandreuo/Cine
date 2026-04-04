@@ -151,16 +151,50 @@ export default async function MoviePage({ params }: { params: { slug: string } }
                   <p>Aún no tenemos los horarios de esta película para el día de hoy.</p>
                 </div>
               ) : (
-                <div className="cinema-group-list" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {screenings.map((s: any) => (
-                    <div key={s.id} className="cinema-group" style={{ padding: '16px', border: '1px solid var(--border)', borderRadius: '12px' }}>
-                      <div className="cinema-group-header">
-                        <div className="cinema-group-name">{s.cinemas?.name}</div>
-                        <div className="cinema-group-address">{s.cinemas?.cities?.name} — {s.format} | {s.language}</div>
+                <div className="cinema-group-list">
+                  {Object.entries(
+                    screenings.reduce((acc: any, s: any) => {
+                      const cinemaName = s.cinemas?.name || 'Cine';
+                      if (!acc[cinemaName]) acc[cinemaName] = [];
+                      acc[cinemaName].push(s);
+                      return acc;
+                    }, {})
+                  ).map(([cinemaName, cinemaScreenings]: [string, any]) => (
+                    <div key={cinemaName} className="cinema-block">
+                      <div className="cinema-block-header">
+                        <h3 className="cinema-name">{cinemaName}</h3>
+                        <span className="cinema-location">
+                          {cinemaScreenings[0]?.cinemas?.cities?.name}
+                        </span>
                       </div>
-                      <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
-                         <span className="time-badge">{new Date(s.start_time).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true })}</span>
-                      </div>
+                      
+                      {/* Grouping by format/language within each cinema */}
+                      {Object.entries(
+                        cinemaScreenings.reduce((acc: any, s: any) => {
+                          const key = `${s.format} | ${s.language}`;
+                          if (!acc[key]) acc[key] = [];
+                          acc[key].push(s);
+                          return acc;
+                        }, {})
+                      ).map(([classification, times]: [string, any]) => (
+                        <div key={classification} className="showtime-group">
+                          <div className="showtime-classification">
+                            {classification.split('|').map((tag) => (
+                              <span key={tag} className="tag-pill">{tag.trim().toUpperCase()}</span>
+                            ))}
+                          </div>
+                          <div className="showtime-grid">
+                            {times.map((t: any) => (
+                              <div key={t.id} className="time-bubble">
+                                <span className="hour">
+                                  {new Date(t.start_time).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true })}
+                                </span>
+                                {t.room && <span className="room">{t.room}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </div>
