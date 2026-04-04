@@ -288,21 +288,6 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
               >
                 📱 Compartir por WhatsApp
               </a>
-              {selected.buy_url && (
-                <a
-                  href={selected.buy_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    flex: 1, minWidth: '140px', textAlign: 'center',
-                    padding: '12px 20px', borderRadius: 'var(--radius)',
-                    background: 'var(--gold)', color: '#000',
-                    fontWeight: 700, fontSize: '0.9rem', textDecoration: 'none',
-                  }}
-                >
-                  🎟 Comprar entrada
-                </a>
-              )}
               <button
                 onClick={() => setSelected(null)}
                 style={{
