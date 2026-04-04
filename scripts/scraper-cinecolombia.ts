@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { supabase } from '../lib/supabase';
+import { supabaseAdmin as supabase } from '../lib/supabase-admin';
 import dotenv from 'dotenv';
 import path from 'path';
 
