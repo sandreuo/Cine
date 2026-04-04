@@ -126,12 +126,12 @@ export default async function MoviePage({ params }: { params: { slug: string } }
           <div className="ad-slot ad-slot-banner" aria-label="Publicidad" />
 
           {/* Trailer */}
-          {movie.trailer_youtube_id && (
+          {movie.trailer_youtube_id && movie.trailer_youtube_id.length > 5 && (
             <section className="trailer-section">
               <h2 className="section-title" style={{ marginBottom: '16px' }}>Trailer Oficial</h2>
               <div className="trailer-wrap">
                 <iframe
-                  src={`https://www.youtube.com/embed/${movie.trailer_youtube_id}?modestbranding=1&rel=0`}
+                  src={`https://www.youtube.com/embed/${movie.trailer_youtube_id}`}
                   title={`Trailer de ${movie.title}`}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
