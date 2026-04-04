@@ -18,17 +18,13 @@ const LANG_LABELS: Record<string, string> = {
 
 function formatTime(isoStr: string) {
   return new Date(isoStr).toLocaleTimeString('es-CO', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
+    hour: '2-digit', minute: '2-digit', hour12: true,
   });
 }
 
 function formatDate(isoStr: string) {
   return new Date(isoStr).toLocaleDateString('es-CO', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
+    weekday: 'long', day: 'numeric', month: 'long',
   });
 }
 
@@ -37,7 +33,6 @@ interface SelectedScreening {
   start_time: string;
   format: string;
   language: string;
-  buy_url: string | null;
   sedeName: string;
   cityName: string;
 }
@@ -60,56 +55,48 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
   const [cityFilter, setCityFilter] = useState('');
   const [selected, setSelected] = useState<SelectedScreening | null>(null);
 
+  // Collapsible state: chain → expanded; sede → expanded
+  const [collapsedChains, setCollapsedChains] = useState<Record<string, boolean>>({});
+  const [collapsedSedes, setCollapsedSedes] = useState<Record<string, boolean>>({});
+
+  const toggleChain = (chain: string) =>
+    setCollapsedChains((prev) => ({ ...prev, [chain]: !prev[chain] }));
+  const toggleSede = (key: string) =>
+    setCollapsedSedes((prev) => ({ ...prev, [key]: !prev[key] }));
+
   const filtered = screenings.filter((s) => {
-    const cinema = s.cinemas as any;
-    if (chainFilter && cinema?.chain !== chainFilter) return false;
-    if (cityFilter && cinema?.cities?.slug !== cityFilter) return false;
+    const c = s.cinemas as any;
+    if (chainFilter && c?.chain !== chainFilter) return false;
+    if (cityFilter && c?.cities?.slug !== cityFilter) return false;
     return true;
   });
 
-  // Group: chain → sede → format|language → screenings
   const grouped: Record<string, Record<string, Record<string, Screening[]>>> = {};
   for (const s of filtered) {
-    const cinema = s.cinemas as any;
-    const chain: string = cinema?.chain ?? 'other';
-    const sede: string = cinema?.name ?? 'Cine';
-    const classification = `${s.format}|${s.language}`;
+    const c = s.cinemas as any;
+    const chain: string = c?.chain ?? 'other';
+    const sede: string = c?.name ?? 'Cine';
+    const cls = `${s.format}|${s.language}`;
     grouped[chain] ??= {};
     grouped[chain][sede] ??= {};
-    grouped[chain][sede][classification] ??= [];
-    grouped[chain][sede][classification].push(s);
+    grouped[chain][sede][cls] ??= [];
+    grouped[chain][sede][cls].push(s);
   }
 
   function handleSelect(t: Screening, sedeName: string, cityName: string) {
-    if (selected?.id === t.id) {
-      setSelected(null);
-      return;
-    }
-    setSelected({
-      id: t.id,
-      start_time: t.start_time,
-      format: t.format,
-      language: t.language,
-      buy_url: t.buy_url,
-      sedeName,
-      cityName,
-    });
+    if (selected?.id === t.id) { setSelected(null); return; }
+    setSelected({ id: t.id, start_time: t.start_time, format: t.format, language: t.language, sedeName, cityName });
   }
 
-  function buildWhatsAppUrl(s: SelectedScreening) {
-    const time = formatTime(s.start_time);
-    const date = formatDate(s.start_time);
+  function buildWaUrl(s: SelectedScreening) {
     const lang = LANG_LABELS[s.language] ?? s.language;
-    const url = `https://cinehoy.co/pelicula/${movieSlug}`;
-
     const msg =
       `🎬 *${movieTitle}*\n\n` +
       `📍 *${s.sedeName}*\n` +
-      `📅 ${date} · ${time}\n` +
+      `📅 ${formatDate(s.start_time)} · ${formatTime(s.start_time)}\n` +
       `🎥 ${s.format} · ${lang}\n\n` +
       `¿Nos vamos? 🍿\n` +
-      `👉 ${url}`;
-
+      `👉 https://cinehoy.co/pelicula/${movieSlug}`;
     return `https://wa.me/?text=${encodeURIComponent(msg)}`;
   }
 
@@ -130,38 +117,24 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
         <div className="filters-row" style={{ marginBottom: '24px', flexWrap: 'wrap' }}>
           {chains.length > 1 && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              <button
-                className={`filter-chip ${chainFilter === '' ? 'active' : ''}`}
-                onClick={() => setChainFilter('')}
-              >
+              <button className={`filter-chip ${chainFilter === '' ? 'active' : ''}`} onClick={() => setChainFilter('')}>
                 🎭 Todas las cadenas
               </button>
               {chains.map((c) => (
-                <button
-                  key={c}
-                  className={`filter-chip ${chainFilter === c ? 'active' : ''}`}
-                  onClick={() => setChainFilter(chainFilter === c ? '' : c)}
-                >
+                <button key={c} className={`filter-chip ${chainFilter === c ? 'active' : ''}`}
+                  onClick={() => setChainFilter(chainFilter === c ? '' : c)}>
                   {CHAIN_LABELS[c] ?? c}
                 </button>
               ))}
             </div>
           )}
           {cities.length > 1 && (
-            <select
-              className="filter-select"
-              value={cityFilter}
-              onChange={(e) => setCityFilter(e.target.value)}
-              aria-label="Filtrar por ciudad"
-            >
+            <select className="filter-select" value={cityFilter}
+              onChange={(e) => setCityFilter(e.target.value)} aria-label="Filtrar por ciudad">
               <option value="">🌎 Todas las ciudades</option>
               {cities.map((slug) => {
                 const match = screenings.find((s) => (s.cinemas as any)?.cities?.slug === slug);
-                return (
-                  <option key={slug} value={slug}>
-                    {(match?.cinemas as any)?.cities?.name ?? slug}
-                  </option>
-                );
+                return <option key={slug} value={slug}>{(match?.cinemas as any)?.cities?.name ?? slug}</option>;
               })}
             </select>
           )}
@@ -176,134 +149,153 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
           <p>Prueba con otra cadena o ciudad.</p>
         </div>
       ) : (
-        Object.entries(grouped).map(([chain, sedes]) => (
-          <div key={chain} className="chain-group" style={{ marginBottom: '32px' }}>
-            {/* Chain header */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '10px',
-              marginBottom: '16px', paddingBottom: '10px', borderBottom: '1px solid var(--border)',
-            }}>
-              <h3 style={{
-                fontSize: '1rem', fontWeight: 700, color: 'var(--gold)',
-                textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0,
-              }}>
-                {CHAIN_LABELS[chain] ?? chain}
-              </h3>
-              <span style={{
-                fontSize: '0.75rem', color: 'var(--text-muted)',
-                background: 'rgba(255,255,255,0.06)', borderRadius: '20px', padding: '2px 10px',
-              }}>
-                {Object.keys(sedes).length} sede{Object.keys(sedes).length !== 1 ? 's' : ''}
-              </span>
-            </div>
+        Object.entries(grouped).map(([chain, sedes]) => {
+          const chainCollapsed = collapsedChains[chain] ?? false;
+          const sedeCount = Object.keys(sedes).length;
+          const totalFunctions = Object.values(sedes)
+            .flatMap((cls) => Object.values(cls))
+            .flat().length;
 
-            {/* Sedes */}
-            <div className="cinema-group-list">
-              {Object.entries(sedes).map(([sedeName, classifications]) => {
-                const firstScreening = Object.values(classifications).flat()[0] as any;
-                const cityName = firstScreening?.cinemas?.cities?.name ?? '';
+          return (
+            <div key={chain} style={{ marginBottom: '24px' }}>
+              {/* Chain header — clickable */}
+              <button
+                onClick={() => toggleChain(chain)}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                  marginBottom: chainCollapsed ? 0 : '16px',
+                  paddingBottom: '10px',
+                  background: 'none', border: 'none', borderBottom: '1px solid var(--border)',
+                  cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                <span style={{
+                  fontSize: '0.95rem', fontWeight: 700, color: 'var(--gold)',
+                  textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1,
+                }}>
+                  {CHAIN_LABELS[chain] ?? chain}
+                </span>
+                <span style={{
+                  fontSize: '0.72rem', color: 'var(--text-muted)',
+                  background: 'rgba(255,255,255,0.06)', borderRadius: '20px', padding: '2px 10px',
+                }}>
+                  {sedeCount} sede{sedeCount !== 1 ? 's' : ''} · {totalFunctions} funciones
+                </span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: '4px' }}>
+                  {chainCollapsed ? '▶' : '▼'}
+                </span>
+              </button>
 
-                return (
-                  <div key={sedeName} className="cinema-block">
-                    <div className="cinema-block-header">
-                      <h4 className="cinema-name" style={{ fontSize: '0.95rem', fontWeight: 600 }}>
-                        {sedeName}
-                      </h4>
-                      {cityName && (
-                        <span className="cinema-location">{cityName.toUpperCase()}</span>
-                      )}
-                    </div>
+              {/* Sedes */}
+              {!chainCollapsed && (
+                <div className="cinema-group-list">
+                  {Object.entries(sedes).map(([sedeName, classifications]) => {
+                    const sedeKey = `${chain}::${sedeName}`;
+                    const sedeCollapsed = collapsedSedes[sedeKey] ?? false;
+                    const firstScreening = Object.values(classifications).flat()[0] as any;
+                    const cityName = firstScreening?.cinemas?.cities?.name ?? '';
+                    const sedeTotal = Object.values(classifications).flat().length;
 
-                    {Object.entries(classifications).map(([classification, times]) => {
-                      const [fmt, lang] = classification.split('|');
-                      return (
-                        <div key={classification} className="showtime-group">
-                          <div className="showtime-classification">
-                            <span className="tag-pill">{fmt.trim().toUpperCase()}</span>
-                            <span className="tag-pill">{(LANG_LABELS[lang.trim()] ?? lang.trim()).toUpperCase()}</span>
+                    return (
+                      <div key={sedeName} className="cinema-block" style={{ overflow: 'hidden' }}>
+                        {/* Sede header — clickable */}
+                        <button
+                          onClick={() => toggleSede(sedeKey)}
+                          className="cinema-block-header"
+                          style={{
+                            width: '100%', background: 'none', border: 'none',
+                            cursor: 'pointer', textAlign: 'left', display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <h4 className="cinema-name" style={{ fontSize: '0.95rem', fontWeight: 600, flex: 1, margin: 0 }}>
+                            {sedeName}
+                          </h4>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {cityName && <span className="cinema-location">{cityName.toUpperCase()}</span>}
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              {sedeTotal} func.
+                            </span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                              {sedeCollapsed ? '▶' : '▼'}
+                            </span>
                           </div>
-                          <div className="showtime-grid">
-                            {times.map((t) => {
-                              const isSelected = selected?.id === t.id;
-                              return (
-                                <button
-                                  key={t.id}
-                                  className="time-bubble"
-                                  onClick={() => handleSelect(t, sedeName, cityName)}
-                                  style={{
-                                    cursor: 'pointer',
-                                    border: isSelected ? '2px solid var(--gold)' : undefined,
-                                    background: isSelected ? 'rgba(212,175,55,0.12)' : undefined,
-                                    outline: 'none',
-                                  }}
-                                  aria-pressed={isSelected}
-                                >
-                                  <span className="hour">{formatTime(t.start_time)}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+                        </button>
+
+                        {/* Showtimes */}
+                        {!sedeCollapsed && Object.entries(classifications).map(([cls, times]) => {
+                          const [fmt, lang] = cls.split('|');
+                          return (
+                            <div key={cls} className="showtime-group">
+                              <div className="showtime-classification">
+                                <span className="tag-pill">{fmt.trim().toUpperCase()}</span>
+                                <span className="tag-pill">{(LANG_LABELS[lang.trim()] ?? lang.trim()).toUpperCase()}</span>
+                              </div>
+                              <div className="showtime-grid">
+                                {times.map((t) => {
+                                  const isSel = selected?.id === t.id;
+                                  return (
+                                    <button key={t.id} className="time-bubble"
+                                      onClick={() => handleSelect(t, sedeName, cityName)}
+                                      style={{
+                                        cursor: 'pointer', outline: 'none',
+                                        border: isSel ? '2px solid var(--gold)' : undefined,
+                                        background: isSel ? 'rgba(212,175,55,0.12)' : undefined,
+                                      }}
+                                      aria-pressed={isSel}>
+                                      <span className="hour">{formatTime(t.start_time)}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </div>
-        ))
+          );
+        })
       )}
 
-      {/* Share panel — sticky bottom */}
+      {/* Share panel */}
       {selected && (
         <div style={{
-          position: 'fixed',
-          bottom: 0, left: 0, right: 0,
-          background: 'var(--bg-card)',
-          borderTop: '1px solid var(--border)',
-          padding: '20px 24px 28px',
-          zIndex: 100,
+          position: 'fixed', bottom: 0, left: 0, right: 0,
+          background: 'var(--bg-card)', borderTop: '1px solid var(--border)',
+          padding: '20px 24px 28px', zIndex: 100,
           boxShadow: '0 -8px 32px rgba(0,0,0,0.5)',
         }}>
           <div style={{ maxWidth: '640px', margin: '0 auto' }}>
-            {/* Summary */}
-            <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
               Función seleccionada
             </p>
             <p style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '2px' }}>
               {selected.sedeName}
             </p>
-            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
               {formatDate(selected.start_time)} · {formatTime(selected.start_time)} · {selected.format} · {LANG_LABELS[selected.language] ?? selected.language}
             </p>
-
-            {/* Actions */}
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <a
-                href={buildWhatsAppUrl(selected)}
-                target="_blank"
-                rel="noopener noreferrer"
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <a href={buildWaUrl(selected)} target="_blank" rel="noopener noreferrer"
                 className="btn-whatsapp"
-                style={{ flex: 1, minWidth: '180px', textAlign: 'center' }}
-              >
+                style={{ flex: 1, minWidth: '180px', textAlign: 'center' }}>
                 📱 Compartir por WhatsApp
               </a>
-              <button
-                onClick={() => setSelected(null)}
-                style={{
-                  padding: '12px 20px', borderRadius: 'var(--radius)',
-                  background: 'transparent', border: '1px solid var(--border)',
-                  color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.9rem',
-                }}
-              >
+              <button onClick={() => setSelected(null)} style={{
+                padding: '12px 20px', borderRadius: 'var(--radius)',
+                background: 'transparent', border: '1px solid var(--border)',
+                color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.9rem',
+              }}>
                 Cerrar
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Spacer so last items aren't hidden behind the panel */}
       {selected && <div style={{ height: '160px' }} />}
     </div>
   );

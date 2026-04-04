@@ -7,6 +7,7 @@ import { scrapeCineColombia } from './scraper-cinecolombia';
 import { scrapeCinemark } from './scraper-cinemark';
 import { scrapeCinepolis } from './scraper-cinepolis';
 import { scrapeProcinal } from './scraper-procinal';
+import { enrichWithTMDB } from './enricher-tmdb';
 
 async function main() {
   console.log('🎬 Iniciando Scraper Global de CineHoy...');
@@ -17,6 +18,7 @@ async function main() {
   await scrapeCinemark();
   await scrapeCinepolis();
   await scrapeProcinal();
+  await enrichWithTMDB();
 
   console.log('✅ Scraping completado con éxito.');
 }
