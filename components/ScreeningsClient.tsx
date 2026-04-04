@@ -208,7 +208,7 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
                             alignItems: 'center',
                           }}
                         >
-                          <h4 className="cinema-name" style={{ fontSize: '0.95rem', fontWeight: 600, flex: 1, margin: 0 }}>
+                          <h4 className="cinema-name" style={{ fontSize: '0.95rem', fontWeight: 600, flex: 1, margin: 0, color: 'var(--gold)' }}>
                             {sedeName}
                           </h4>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
