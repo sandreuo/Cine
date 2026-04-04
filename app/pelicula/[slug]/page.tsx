@@ -102,6 +102,11 @@ export default async function MoviePage({ params }: { params: { slug: string } }
                 <div className="movie-detail-meta">
                   {movie.rating && <span className="movie-rating-badge" style={{ position: 'static' }}>{movie.rating}</span>}
                   {movie.duration_minutes && <span className="text-secondary">{movie.duration_minutes} min</span>}
+                  {movie.release_date && (
+                    <span className="text-secondary">
+                      • Estreno: {new Date(movie.release_date).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </span>
+                  )}
                   {movie.genres && (
                     <span className="text-secondary">
                       • {movie.genres.join(', ')}

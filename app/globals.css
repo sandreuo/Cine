@@ -479,6 +479,29 @@ button {
   color: var(--text-secondary);
 }
 
+.movie-new-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: var(--gold);
+  color: #0a0a0f;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  z-index: 2;
+  letter-spacing: 0.5px;
+}
+
+.movie-release-date {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .movie-card-body {
   padding: 12px;
   flex: 1;
@@ -516,6 +539,7 @@ button {
 .movie-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 0.72rem;
   color: var(--text-muted);

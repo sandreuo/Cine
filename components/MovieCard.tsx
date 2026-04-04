@@ -25,6 +25,9 @@ export default function MovieCard({ movie }: { movie: Movie }) {
           ) : (
             <div className="movie-poster-placeholder">🎞</div>
           )}
+          {movie.release_date && (new Date().getTime() - new Date(movie.release_date).getTime() < 30 * 24 * 60 * 60 * 1000) && (new Date(movie.release_date) <= new Date()) && (
+            <span className="movie-new-badge">ESTRENO</span>
+          )}
           {movie.rating && (
             <span className="movie-rating-badge">{movie.rating}</span>
           )}
@@ -49,6 +52,11 @@ export default function MovieCard({ movie }: { movie: Movie }) {
         <div className="movie-meta">
           {movie.duration_minutes && (
             <span className="movie-duration">{movie.duration_minutes} min</span>
+          )}
+          {movie.release_date && (
+            <span className="movie-release-date">
+              📅 {new Date(movie.release_date).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}
+            </span>
           )}
         </div>
       </div>

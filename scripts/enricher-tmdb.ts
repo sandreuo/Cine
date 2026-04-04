@@ -32,13 +32,21 @@ async function enrichMovie(id: number, title: string): Promise<number | null> {
   }
 
   const tmdbId: number = result.id;
-  const details = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: 'videos' });
+  const details = await tmdbFetch(`/movie/${tmdbId}`, { append_to_response: 'videos,release_dates' });
 
   const poster = details.poster_path ? `${POSTER_BASE}${details.poster_path}` : null;
   const description: string = details.overview || null;
   const duration: number | null = details.runtime || null;
   const genres: string[] = details.genres?.map((g: any) => g.name) ?? [];
-  const release_date: string | null = details.release_date || null;
+  
+  // Prioritize Colombia (CO) release date
+  const releaseResults = details.release_dates?.results ?? [];
+  const coRelease = releaseResults.find((r: any) => r.iso_3166_1 === 'CO');
+  // Type 3 is Theatrical release, try to find it first, otherwise any CO release
+  const coDate = coRelease?.release_dates?.find((d: any) => d.type === 3)?.release_date 
+    ?? coRelease?.release_dates?.[0]?.release_date;
+    
+  const release_date: string | null = coDate ? coDate.split('T')[0] : (details.release_date || null);
 
   const videos: any[] = details.videos?.results ?? [];
   const trailer =
@@ -134,7 +142,7 @@ export async function enrichWithTMDB() {
 
   const { data: movies, error } = await supabase
     .from('movies')
-    .select('id, title, tmdb_id');
+    .select('id, title, tmdb_id, release_date');
 
   if (error || !movies) {
     console.error('❌ Error leyendo películas:', error?.message);
@@ -144,9 +152,9 @@ export async function enrichWithTMDB() {
   console.log(`   ${movies.length} películas para enriquecer`);
 
   for (const movie of movies) {
-    // Skip if already has tmdb_id (avoid redundant API calls on every run)
-    if ((movie as any).tmdb_id) {
-      console.log(`   ⏭  ${movie.title} — ya tiene tmdb_id, saltando`);
+    // Skip only if already has tmdb_id AND release_date
+    if ((movie as any).tmdb_id && (movie as any).release_date) {
+      console.log(`   ⏭️  ${movie.title} — ya está enriquecido, saltando`);
       continue;
     }
     try {
