@@ -163,14 +163,13 @@ button {
 .hero-eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(245,197,24,0.12);
-  border: 1px solid rgba(245,197,24,0.2);
+  gap: 8px;
+  padding: 6px 14px;
   border-radius: 40px;
-  padding: 4px 14px;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--gold);
+  background: rgba(255,255,255,0.05); /* very light transparent, no border */
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
   letter-spacing: 0.5px;
   text-transform: uppercase;
   margin-bottom: 16px;

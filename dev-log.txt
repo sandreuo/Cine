@@ -95,3 +95,4 @@ https://nextjs.org/telemetry
  ✓ Compiled /[ciudad] in 1248ms (659 modules)
  GET /favicon.ico 200 in 2133ms
  ✓ Compiled in 313ms (671 modules)
+ ✓ Compiled in 354ms (671 modules)
