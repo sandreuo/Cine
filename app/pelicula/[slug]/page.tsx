@@ -2,8 +2,8 @@ import { ResolvingMetadata } from 'next';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
-import Loading from '@/app/loading';
 import Image from 'next/image';
+import ScreeningsClient from '@/components/ScreeningsClient';
 
 export const revalidate = 60; // Revalidate every minute
 
@@ -144,61 +144,7 @@ export default async function MoviePage({ params }: { params: { slug: string } }
           <section className="screenings-section">
             <h2 className="section-title">Horarios y Funciones</h2>
             <div style={{ marginTop: '24px' }}>
-              {(!screenings || screenings.length === 0) ? (
-                <div className="empty-state" style={{ border: '1px solid var(--border)', borderRadius: '12px' }}>
-                  <div className="icon">😢</div>
-                  <h3>No hay funciones registradas hoy</h3>
-                  <p>Aún no tenemos los horarios de esta película para el día de hoy.</p>
-                </div>
-              ) : (
-                <div className="cinema-group-list">
-                  {Object.entries(
-                    screenings.reduce((acc: any, s: any) => {
-                      const cinemaName = s.cinemas?.name || 'Cine';
-                      if (!acc[cinemaName]) acc[cinemaName] = [];
-                      acc[cinemaName].push(s);
-                      return acc;
-                    }, {})
-                  ).map(([cinemaName, cinemaScreenings]: [string, any]) => (
-                    <div key={cinemaName} className="cinema-block">
-                      <div className="cinema-block-header">
-                        <h3 className="cinema-name">{cinemaName}</h3>
-                        <span className="cinema-location">
-                          {cinemaScreenings[0]?.cinemas?.cities?.name}
-                        </span>
-                      </div>
-                      
-                      {/* Grouping by format/language within each cinema */}
-                      {Object.entries(
-                        cinemaScreenings.reduce((acc: any, s: any) => {
-                          const key = `${s.format} | ${s.language}`;
-                          if (!acc[key]) acc[key] = [];
-                          acc[key].push(s);
-                          return acc;
-                        }, {})
-                      ).map(([classification, times]: [string, any]) => (
-                        <div key={classification} className="showtime-group">
-                          <div className="showtime-classification">
-                            {classification.split('|').map((tag) => (
-                              <span key={tag} className="tag-pill">{tag.trim().toUpperCase()}</span>
-                            ))}
-                          </div>
-                          <div className="showtime-grid">
-                            {times.map((t: any) => (
-                              <div key={t.id} className="time-bubble">
-                                <span className="hour">
-                                  {new Date(t.start_time).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: true })}
-                                </span>
-                                {t.room && <span className="room">{t.room}</span>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
+              <ScreeningsClient screenings={screenings || []} />
             </div>
           </section>
         </div>
