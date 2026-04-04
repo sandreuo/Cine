@@ -71,3 +71,20 @@ https://nextjs.org/telemetry
  ✓ Compiled /_not-found in 646ms (669 modules)
  GET /api/movies 404 in 234ms
  GET /favicon.ico 200 in 701ms
+ ✓ Compiled in 702ms (669 modules)
+ ✓ Compiled /_not-found in 233ms (672 modules)
+ GET /_next/static/css/app/layout.css?v=1775271010946 404 in 170ms
+ GET /_next/static/css/app/layout.css?v=1775271011031 404 in 158ms
+ GET /_next/static/css/app/layout.css?v=1775271011215 404 in 29ms
+ GET /api/movies 404 in 38ms
+ GET /_next/static/css/app/layout.css?v=1775271011261 404 in 24ms
+ GET /_next/static/css/app/layout.css?v=1775271011253 404 in 34ms
+ GET /_next/static/chunks/main-app.js?v=1775271011253 404 in 40ms
+ GET /_next/static/chunks/app-pages-internals.js 404 in 34ms
+ GET /favicon.ico 200 in 1170ms
+  ▲ Next.js 14.2.5
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 1553ms
