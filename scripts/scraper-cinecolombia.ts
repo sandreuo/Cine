@@ -14,7 +14,14 @@ export async function scrapeCineColombia() {
     // We go to Bogota as a baseline for posters/metadata
     const url = 'https://www.cinecolombia.com/bogota/cartelera';
     console.log(`Navegando a ${url}...`);
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    
+    // Wait for the movie grid to ensure __NEXT_DATA__ is hydrated
+    try {
+      await page.waitForSelector('.movie-card', { timeout: 30000 });
+    } catch(e) {
+      console.log('Timeout waiting for .movie-card, but trying to extract anyway...');
+    }
     
     // Extract __NEXT_DATA__
     const nextDataStr = await page.evaluate(() => {

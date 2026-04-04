@@ -298,6 +298,41 @@ button {
   animation: pulse 2s infinite;
 }
 
+/* ============ SCREENINGS ============ */
+.cinema-group-list {
+  animation: fadeIn 0.5s ease-out;
+}
+
+.cinema-group {
+  transition: all 0.3s ease;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cinema-group:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--gold-muted) !important;
+}
+
+.time-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--gold);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.time-badge:hover {
+  background: var(--gold);
+  color: #000;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.3);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
