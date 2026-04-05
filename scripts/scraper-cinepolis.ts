@@ -209,15 +209,21 @@ export async function scrapeCinepolis() {
       if (!res.ok) continue;
 
       const json = await res.json();
-      const cinemas: any[] = json?.d?.Cinemas ?? [];
-      console.log(`      Found ${cinemas.length} cinemas`);
+      // Try multiple response structures
+      const cinemas: any[] = json?.d?.Cinemas ?? json?.Cinemas ?? json?.d ?? [];
+      console.log(`      Found ${cinemas.length} cinemas, keys: ${JSON.stringify(Object.keys(json?.d ?? json ?? {})).substring(0, 120)}`);
+      if (cinemas.length > 0) {
+        const sample = cinemas[0];
+        console.log(`      Sample cinema keys: ${Object.keys(sample).join(', ')}`);
+        console.log(`      Dates length: ${(sample.Dates ?? sample.dates ?? []).length}, sample date keys: ${JSON.stringify(Object.keys((sample.Dates ?? sample.dates ?? [])[0] ?? {}))}`);
+      }
 
       for (const c of cinemas) {
         const cinemaId = await getOrCreateCinema(c.Name, cityId, parseFloat(c.Lat), parseFloat(c.Lng));
         if (!cinemaId) continue;
 
         let cinemaFunctions = 0;
-        const dates = c.Dates ?? [];
+        const dates = c.Dates ?? c.dates ?? c.ShowDates ?? [];
         
         for (const dateObj of dates) {
           const dateStr: string = dateObj.DateQuery; // YYYYMMDD
@@ -238,6 +244,8 @@ export async function scrapeCinepolis() {
               duration_minutes: parseInt(m.RunTime ?? m.Duration ?? '0') || null,
               genres: m.Gender ? [m.Gender] : (m.Genre ? [m.Genre] : []),
               description: m.Synopsis || m.Sinopsis || null,
+              is_estreno: m.IsPremiere === true || m.Premiere === true,
+              is_preventa: m.IsPresale === true || m.Presale === true,
             }, { onConflict: 'slug' }).select('id').single();
 
             if (!dbMovie) continue;

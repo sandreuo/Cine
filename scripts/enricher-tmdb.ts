@@ -57,6 +57,7 @@ const TITLE_OVERRIDES: Record<string, string> = {
   'esa cosa con alas': 'that thing with feathers',
   'noche de miedo': 'fear street',
   'proyecto fin del mundo': 'project hail mary',
+  'project hail mary': 'project hail mary',
 };
 
 // Multiple search strategies to maximize TMDB hit rate
