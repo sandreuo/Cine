@@ -5,46 +5,53 @@ import path from 'path';
 
 dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
+const today = new Date().toISOString().split('T')[0];
+
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  return text.toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
 function cleanTitle(raw: string): string {
-  return raw
-    .replace(/[\s\n\r]+/g, ' ')
+  return raw.replace(/[\s\n\r]+/g, ' ')
     .replace(/\s*\(?\s*(DOB|SUB|DUBBED|SUBTITULAD[AO])\s*(2D|3D|IMAX|4DX|XD)?\s*\)?\s*$/i, '')
-    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '')
-    .trim();
+    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '').trim();
 }
 
 const GARBAGE_PATTERNS = [
-  /^(top[\s-]+)?banner/i,
-  /^horario[\s-]+apertura/i,
-  /\bmembership\b/i,
-  /\bactivated\b/i,
-  /\bworld[\s-]+tour\b/i,
-  /\blive[\s-]+viewing\b/i,
-  /arirang/i,
-  /^bts\b/i,
-  /^standar(d)?$/i,
+  /^(top[\s-]+)?banner/i, /^horario[\s-]+apertura/i, /\bmembership\b/i,
+  /\bactivated\b/i, /\bworld[\s-]+tour\b/i, /\blive[\s-]+viewing\b/i,
+  /arirang/i, /^bts\b/i, /^standar(d)?$/i, /^cine[\s-]club/i,
 ];
 
 function isValidMovieTitle(title: string): boolean {
-  if (!title || title.trim().length < 3) return false;
+  if (!title || title.trim().length < 2) return false;
   return !GARBAGE_PATTERNS.some(p => p.test(title.trim()));
 }
 
-async function getOrCreateCity(slug: string): Promise<number | null> {
+function normalizeFormat(raw: string): string {
+  const f = (raw ?? '').toUpperCase();
+  if (f.includes('IMAX')) return 'IMAX';
+  if (f.includes('4DX')) return '4DX';
+  if (f.includes('XD')) return 'XD';
+  if (f.includes('PREMIUM')) return 'PREMIUM';
+  if (f.includes('3D')) return '3D';
+  return '2D';
+}
+
+function normalizeLanguage(raw: string): 'subtitulada' | 'doblada' | 'original' {
+  const l = (raw ?? '').toLowerCase();
+  if (l.includes('dob') || l.includes('dub')) return 'doblada';
+  if (l.includes('orig')) return 'original';
+  return 'subtitulada';
+}
+
+async function getOrCreateCity(slug: string, name?: string): Promise<number | null> {
   const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
   if (data) return data.id;
-  const name = slug.charAt(0).toUpperCase() + slug.slice(1);
-  const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
-  if (error) { console.error('Error creando ciudad:', error.message); return null; }
+  const cityName = name ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+  const { data: c, error } = await supabase.from('cities').insert({ slug, name: cityName }).select('id').single();
+  if (error) { console.error('Error ciudad:', error.message); return null; }
   return c?.id ?? null;
 }
 
@@ -53,100 +60,88 @@ async function getOrCreateCinema(name: string, cityId: number): Promise<number |
   if (data) return data.id;
   const { data: c, error } = await supabase.from('cinemas')
     .insert({ name, city_id: cityId, chain: 'cinepolis' }).select('id').single();
-  if (error) { console.error('Error creando cine:', error.message); return null; }
+  if (error) { console.error('Error cine:', error.message); return null; }
   return c?.id ?? null;
 }
 
-// Known Cinépolis cities as fallback (expanded list)
-const CITIES_FALLBACK: Record<string, string> = {
-  'bogota-colombia': 'bogota',
-  'medellin-colombia': 'medellin',
-  'cali-colombia': 'cali',
-  'barranquilla-colombia': 'barranquilla',
-  'bucaramanga-colombia': 'bucaramanga',
-  'cartagena-colombia': 'cartagena',
-  'pereira-colombia': 'pereira',
-  'manizales-colombia': 'manizales',
-  'ibague-colombia': 'ibague',
-  'cucuta-colombia': 'cucuta',
-  'villavicencio-colombia': 'villavicencio',
-  'santa-marta-colombia': 'santa-marta',
-  'monteria-colombia': 'monteria',
-};
-
-const today = new Date().toISOString().split('T')[0];
+// Cinépolis Colombia cities: confirmed 404 for most except bogota, cali, barranquilla, manizales
+// Keeping all and gracefully skipping 404s
+const CITIES: Array<{ slug: string; name: string }> = [
+  { slug: 'bogota', name: 'Bogotá' },
+  { slug: 'cali', name: 'Cali' },
+  { slug: 'barranquilla', name: 'Barranquilla' },
+  { slug: 'manizales', name: 'Manizales' },
+  { slug: 'medellin', name: 'Medellín' },
+  { slug: 'bucaramanga', name: 'Bucaramanga' },
+  { slug: 'cartagena', name: 'Cartagena' },
+  { slug: 'pereira', name: 'Pereira' },
+];
 
 export async function scrapeCinepolis() {
   console.log('🎬 Iniciando scraper de Cinépolis Colombia...');
 
   const browser = await chromium.launch({
     headless: true,
-    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox'],
   });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     locale: 'es-CO',
     timezoneId: 'America/Bogota',
+    extraHTTPHeaders: { 'Accept-Language': 'es-CO,es;q=0.9' },
   });
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
   try {
-    for (const [cinepolisSlug, dbSlug] of Object.entries(CITIES_FALLBACK)) {
-      console.log(`\n📍 Scrapeando Cinépolis: ${dbSlug}`);
-      const cityId = await getOrCreateCity(dbSlug as string);
-      if (!cityId) continue;
+    for (const { slug: citySlug, name: cityName } of CITIES) {
+      console.log(`\n📍 Cinépolis: ${citySlug}`);
 
-      // ── STEP 1: Load city cartelera, capture API calls & get movie list ──
-      const capturedApiData: any[] = [];
+      const allApiData: { url: string; body: any }[] = [];
       const cartelaPage = await context.newPage();
 
+      // Capture ALL JSON responses — no filter
       await cartelaPage.route('**/*', async (route, request) => {
-        const url = request.url();
-        if (request.method() === 'GET') {
-          const response = await route.fetch();
-          const ct = response.headers()['content-type'] ?? '';
-          if (ct.includes('application/json') &&
-            (url.includes('/api/') || url.includes('movies') || url.includes('showtimes') ||
-             url.includes('billboard') || url.includes('cartelera') || url.includes('cinepolis'))) {
-            try {
-              const body = await response.json();
-              capturedApiData.push({ url, body });
-              console.log(`  📡 API: ${url.substring(0, 90)}`);
-            } catch { /* ignore */ }
-          }
-          await route.fulfill({ response });
-        } else {
-          await route.continue();
+        const response = await route.fetch();
+        const ct = response.headers()['content-type'] ?? '';
+        if (ct.includes('application/json')) {
+          try {
+            const body = await response.json();
+            allApiData.push({ url: request.url(), body });
+          } catch { /* ignore */ }
         }
+        await route.fulfill({ response });
       });
 
-      const cartelaUrl = `https://cinepolis.com.co/cartelera/${cinepolisSlug}`;
-      console.log(`   Cargando ${cartelaUrl}`);
+      const cartelaUrl = `https://cinepolis.com.co/cartelera/${citySlug}-colombia`;
       try {
         await cartelaPage.goto(cartelaUrl, { waitUntil: 'networkidle', timeout: 40000 });
       } catch {
         try {
           await cartelaPage.goto(cartelaUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        } catch (e) {
-          console.error(`   ❌ Timeout cargando ${cartelaUrl}:`, (e as Error).message);
+        } catch {
           await cartelaPage.close();
           continue;
         }
       }
-      await cartelaPage.waitForTimeout(4000);
+      await cartelaPage.waitForTimeout(5000);
 
       const pageTitle = await cartelaPage.title();
-      const pageUrl = cartelaPage.url();
-      console.log(`   Título: "${pageTitle}" | URL: ${pageUrl}`);
+      if (pageTitle.toLowerCase().includes('404') || pageTitle.toLowerCase().includes('error')) {
+        console.log(`   ⚠️  404 — ciudad no existe en Cinépolis`);
+        await cartelaPage.unroute('**/*');
+        await cartelaPage.close();
+        continue;
+      }
+
+      console.log(`   APIs capturadas: ${allApiData.length}`);
+      for (const { url, body } of allApiData) {
+        console.log(`      📡 ${url.substring(0, 100)} → keys: ${Object.keys(body ?? {}).join(', ').substring(0, 80)}`);
+      }
 
       // Try __NEXT_DATA__
-      const ndStr = await cartelaPage.evaluate(() => {
-        const el = document.getElementById('__NEXT_DATA__');
-        return el?.textContent ?? null;
-      });
-
+      const ndStr = await cartelaPage.evaluate(() => document.getElementById('__NEXT_DATA__')?.textContent ?? null);
       let movieRefs: { slug: string; title: string; url: string }[] = [];
 
       if (ndStr) {
@@ -154,65 +149,52 @@ export async function scrapeCinepolis() {
         const pp = nd?.props?.pageProps ?? {};
         console.log(`   pageProps keys: ${Object.keys(pp).join(', ')}`);
 
-        const movies: any[] =
-          pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.films ?? [];
+        const rawMovies: any[] = pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.films ?? pp.cartelera ?? [];
+        console.log(`   ${rawMovies.length} películas en __NEXT_DATA__`);
 
-        movieRefs = movies.map((m: any) => ({
-          slug: m.slug ?? m.url ?? slugify(m.title ?? ''),
-          title: m.title ?? m.titulo ?? m.name ?? '',
+        movieRefs = rawMovies.map((m: any) => ({
+          slug: m.slug ?? m.url_slug ?? slugify(m.title ?? m.titulo ?? ''),
+          title: cleanTitle(m.title ?? m.titulo ?? m.name ?? ''),
           url: m.url ?? '',
-        })).filter(r => r.title);
-
-        console.log(`   ${movieRefs.length} películas en __NEXT_DATA__`);
+        })).filter(r => isValidMovieTitle(r.title));
       }
 
-      // Process intercepted API data for movies
-      for (const { url, body } of capturedApiData) {
-        const movies: any[] =
-          body?.movies ?? body?.Films ?? body?.films ??
-          body?.data?.movies ?? body?.results ?? (Array.isArray(body) ? body : []);
-        if (movies.length > 0 && movieRefs.length === 0) {
-          console.log(`   ${movies.length} películas desde API: ${url.substring(0, 60)}`);
-          movieRefs = movies.map((m: any) => ({
-            slug: m.slug ?? slugify(m.title ?? m.Title ?? ''),
-            title: m.title ?? m.Title ?? m.nombre ?? '',
-            url: m.url ?? '',
-          })).filter(r => r.title);
-        }
-      }
-
-      // DOM fallback: get movie links from rendered page
+      // DOM fallback: find movie links
       if (movieRefs.length === 0) {
         movieRefs = await cartelaPage.evaluate(() => {
           const refs: { slug: string; title: string; url: string }[] = [];
-          document.querySelectorAll('a[href*="/pelicula/"], a[href*="/movie/"], a[href*="/film/"]').forEach((a) => {
+          document.querySelectorAll('a[href*="/pelicula/"], a[href*="/cartelera/"]').forEach((a) => {
             const href = (a as HTMLAnchorElement).href;
-            const match = href.match(/\/(?:pelicula|movie|film)\/([^/?#]+)/);
-            if (!match) return;
-            const slug = match[1];
+            // Match /cartelera/{city}/{slug} or /pelicula/{slug}
+            const m = href.match(/\/(?:pelicula|cartelera\/[^/]+)\/([^/?#]+)/);
+            if (!m) return;
+            const slug = m[1];
+            // Exclude city slugs
+            if (['bogota', 'cali', 'medellin', 'barranquilla', 'bucaramanga', 'cartagena', 'manizales', 'pereira'].includes(slug)) return;
             const title = a.querySelector('h2,h3,h4,[class*="title"],[class*="titulo"]')?.textContent?.trim()
-              ?? a.getAttribute('title') ?? slug;
+              ?? a.getAttribute('title') ?? slug.replace(/-/g, ' ');
             if (!refs.find(r => r.slug === slug)) refs.push({ slug, title, url: href });
           });
           return refs;
         });
-        console.log(`   ${movieRefs.length} películas desde DOM links`);
+        movieRefs = movieRefs
+          .map(r => ({ ...r, title: cleanTitle(r.title) }))
+          .filter(r => isValidMovieTitle(r.title));
+        console.log(`   ${movieRefs.length} películas desde DOM`);
       }
 
       await cartelaPage.unroute('**/*');
       await cartelaPage.close();
 
-      // Clean titles and filter out garbage
-      movieRefs = movieRefs
-        .map(r => ({ ...r, title: cleanTitle(r.title) }))
-        .filter(r => isValidMovieTitle(r.title));
-
       if (movieRefs.length === 0) {
-        console.log(`   ⚠️  Sin películas para ${dbSlug}`);
+        console.log(`   ⚠️  Sin películas para ${citySlug}`);
         continue;
       }
 
-      // ── STEP 2: For each movie, navigate to its detail page → get all sedes ──
+      const cityId = await getOrCreateCity(citySlug, cityName);
+      if (!cityId) continue;
+
+      // ── STEP 2: Per-movie detail page → all cinema sedes ─────────────────
       for (const ref of movieRefs) {
         const { slug, title, url: refUrl } = ref;
         const movieSlug = slug || slugify(title);
@@ -222,218 +204,150 @@ export async function scrapeCinepolis() {
         ).select('id').single();
         if (!movie) continue;
 
-        // Build movie page URL
-        const moviePageUrl = refUrl.startsWith('http')
+        // Cinépolis movie page: /cartelera/{city}-colombia/{slug}
+        const movieUrl = refUrl?.startsWith('http')
           ? refUrl
-          : `https://cinepolis.com.co/cartelera/${cinepolisSlug}/${slug}`;
+          : `https://cinepolis.com.co/cartelera/${citySlug}-colombia/${slug}`;
 
-        const movieApiData: any[] = [];
+        const movieApiData: { url: string; body: any }[] = [];
         const moviePage = await context.newPage();
-        console.log(`   🎥 ${title}`);
 
         await moviePage.route('**/*', async (route, request) => {
-          const url = request.url();
-          if (request.method() === 'GET') {
-            const response = await route.fetch();
-            const ct = response.headers()['content-type'] ?? '';
-            if (ct.includes('application/json') &&
-              (url.includes('/api/') || url.includes('showtimes') || url.includes('horarios') ||
-               url.includes('schedule') || url.includes('functions'))) {
-              try { movieApiData.push({ url, body: await response.json() }); } catch { /* ignore */ }
-            }
-            await route.fulfill({ response });
-          } else {
-            await route.continue();
+          const response = await route.fetch();
+          const ct = response.headers()['content-type'] ?? '';
+          if (ct.includes('application/json')) {
+            try { movieApiData.push({ url: request.url(), body: await response.json() }); } catch { /* ignore */ }
           }
+          await route.fulfill({ response });
         });
 
+        console.log(`   🎥 ${title}`);
         try {
-          await moviePage.goto(moviePageUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
-          await moviePage.waitForTimeout(3000);
+          await moviePage.goto(movieUrl, { waitUntil: 'domcontentloaded', timeout: 35000 });
+          await moviePage.waitForTimeout(4000);
 
           // Try __NEXT_DATA__ on movie page
-          const movieNdStr = await moviePage.evaluate(() => {
-            const el = document.getElementById('__NEXT_DATA__');
-            return el?.textContent ?? null;
-          });
+          const movieNd = await moviePage.evaluate(() => document.getElementById('__NEXT_DATA__')?.textContent ?? null);
 
-          if (movieNdStr) {
-            const nd = JSON.parse(movieNdStr);
+          let sedeCount = 0;
+          if (movieNd) {
+            const nd = JSON.parse(movieNd);
             const pp = nd?.props?.pageProps ?? {};
-            const m = pp.movie ?? pp.film ?? pp.data ?? {};
 
-            // Update movie metadata
-            if (m.poster_url ?? m.poster ?? m.image) {
+            // Update movie metadata if available
+            const m = pp.movie ?? pp.film ?? pp.data ?? pp.pelicula ?? {};
+            if (m.titulo ?? m.title ?? m.poster_url ?? m.image) {
               await supabase.from('movies').update({
-                poster_url: m.poster_url ?? m.poster ?? m.image ?? null,
-                description: m.synopsis ?? m.description ?? m.sinopsis ?? null,
-                duration_minutes: parseInt(m.duration ?? m.duracion ?? '0') || null,
-                rating: m.rating ?? m.clasificacion ?? null,
-                genres: (m.genres ?? m.generos ?? []).map((g: any) => g?.name ?? g ?? ''),
+                title: cleanTitle(m.titulo ?? m.title ?? title),
+                poster_url: m.poster_url ?? m.image ?? m.poster ?? null,
+                description: m.sinopsis ?? m.synopsis ?? m.description ?? null,
+                duration_minutes: parseInt(String(m.duracion ?? m.duration ?? '0')) || null,
+                rating: m.clasificacion ?? m.rating ?? null,
               }).eq('id', movie.id);
             }
 
-            // Get showings by sede
-            const showings: any[] =
-              pp.showings ?? pp.screenings ?? pp.functions ?? pp.showtimes ??
-              m.showings ?? m.screenings ?? [];
+            // Showings: sedes with schedules
+            const showings: any[] = pp.showings ?? pp.screenings ?? pp.funciones ?? pp.horarios ??
+              m.showings ?? m.screenings ?? m.funciones ?? [];
 
-            let sedeCount = 0;
             for (const showing of showings) {
-              const cinemaName: string =
-                showing.cinema?.name ?? showing.cinema?.nombre ??
-                showing.theater?.name ?? showing.CinemaName ?? showing.name ?? '';
+              const cinemaName: string = showing.nombre ?? showing.cinema?.nombre ??
+                showing.name ?? showing.cinema?.name ?? showing.complejo ?? '';
               if (!cinemaName) continue;
 
-              const cinemaId = await getOrCreateCinema(cinemaName, cityId);
+              // Cinema city — may differ from current city loop
+              const rawCity: string = showing.ciudad ?? showing.city ?? showing.cinema?.ciudad ?? citySlug;
+              const sCity = rawCity.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(' ')[0];
+              const scdCitySlug = sCity || citySlug;
+              const scCityId = scdCitySlug !== citySlug
+                ? (await getOrCreateCity(scdCitySlug) ?? cityId)
+                : cityId;
+
+              const cinemaId = await getOrCreateCinema(cinemaName, scCityId);
               if (!cinemaId) continue;
               sedeCount++;
 
-              const schedules: any[] =
-                showing.schedules ?? showing.horarios ?? showing.times ?? (showing.time ? [showing] : []);
+              const schedules: any[] = showing.horarios ?? showing.schedules ??
+                showing.funciones ?? (showing.hora ? [showing] : []);
               for (const sched of schedules) {
-                const rawTime: string = sched.time ?? sched.hora ?? sched.start_time ?? '';
+                const rawTime: string = sched.hora ?? sched.time ?? sched.start_time ?? '';
                 if (!rawTime) continue;
                 const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
-                  ? `${today}T${rawTime.padStart(5, '0')}:00`
-                  : rawTime;
-                await supabase.from('screenings').upsert(
-                  {
-                    movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
-                    format: sched.format ?? sched.Format ?? sched.formato ?? '2D',
-                    language: sched.language ?? sched.idioma ?? 'subtitulada',
-                    buy_url: null,
-                  },
-                  { onConflict: 'movie_id,cinema_id,start_time' }
-                );
+                  ? `${today}T${rawTime.padStart(5, '0')}:00` : rawTime;
+
+                await supabase.from('screenings').upsert({
+                  movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
+                  format: normalizeFormat(sched.tipo ?? sched.format ?? sched.sala ?? '2D'),
+                  language: normalizeLanguage(sched.idioma ?? sched.language ?? 'subtitulada'),
+                  buy_url: null,
+                }, { onConflict: 'movie_id,cinema_id,start_time' });
               }
             }
-            if (sedeCount > 0) console.log(`      ✅ ${sedeCount} sedes via __NEXT_DATA__`);
+            if (sedeCount > 0) console.log(`      ✅ ${sedeCount} sedes en __NEXT_DATA__`);
           }
 
-          // ── DOM scraping: read rendered cinema blocks ────────────────
-          const domSedes = await moviePage.evaluate(() => {
-            const result: { cinema: string; times: { time: string; format: string; lang: string }[] }[] = [];
-
-            // Cinépolis renders cinema blocks — try multiple selector strategies
-            const strategies = [
-              '[class*="complejo"]', '[class*="complex"]', '[class*="cinema-block"]',
-              '[class*="theater"]', '[class*="sede"]', 'section[class*="cine"]',
-            ];
-
-            let blocks: Element[] = [];
-            for (const sel of strategies) {
-              blocks = Array.from(document.querySelectorAll(sel));
-              if (blocks.length > 0) break;
+          // Log all captured APIs on movie page for structure discovery
+          if (movieApiData.length > 0) {
+            for (const { url, body } of movieApiData) {
+              console.log(`      📡 ${url.substring(0, 100)}`);
+              const preview = JSON.stringify(body).substring(0, 200);
+              console.log(`         ${preview}`);
             }
+          }
 
-            // Fallback: scan for uppercase headings followed by time buttons
-            if (blocks.length === 0) {
+          // DOM fallback: scan for cinema name headings + time buttons
+          if (sedeCount === 0) {
+            const domSedes = await moviePage.evaluate(() => {
+              const result: { cinema: string; times: { time: string; format: string; lang: string }[] }[] = [];
+
               document.querySelectorAll('h2, h3, h4').forEach((h) => {
                 const name = h.textContent?.trim() ?? '';
-                if (name.length < 5) return;
+                if (name.length < 4) return;
 
                 const times: { time: string; format: string; lang: string }[] = [];
                 let sibling = h.nextElementSibling;
                 let depth = 0;
-                while (sibling && depth < 8) {
-                  sibling.querySelectorAll('button, a').forEach((btn) => {
-                    const text = btn.textContent?.trim() ?? '';
-                    const m = text.match(/\d{1,2}:\d{2}/);
-                    if (m) {
-                      const ctx = btn.closest('div')?.textContent ?? '';
-                      times.push({
-                        time: m[0],
-                        format: ctx.match(/\b(IMAX|4DX|3D|2D|XD)\b/i)?.[1]?.toUpperCase() ?? '2D',
-                        lang: ctx.toLowerCase().includes('dob') ? 'doblada' : 'subtitulada',
-                      });
-                    }
+                while (sibling && depth < 10) {
+                  sibling.querySelectorAll('button, a[href], [class*="hora"], [class*="time"]').forEach((btn) => {
+                    const t = btn.textContent?.trim() ?? '';
+                    const match = t.match(/\b(\d{1,2}:\d{2})\b/);
+                    if (!match) return;
+                    const ctx = btn.closest('[class]')?.textContent ?? btn.parentElement?.textContent ?? '';
+                    const format = ctx.match(/\b(IMAX|4DX|3D|2D|XD|Premium)\b/i)?.[1]?.toUpperCase() ?? '2D';
+                    const lang = ctx.toLowerCase().includes('dob') ? 'doblada' : 'subtitulada';
+                    times.push({ time: match[1], format, lang });
                   });
+                  if (['H2', 'H3', 'H4'].includes(sibling.tagName)) break;
                   sibling = sibling.nextElementSibling;
                   depth++;
                 }
                 if (times.length > 0) result.push({ cinema: name, times });
               });
               return result;
-            }
-
-            blocks.forEach((block) => {
-              const heading = block.querySelector('h2,h3,h4,[class*="name"],[class*="nombre"],[class*="title"]');
-              const cinema = heading?.textContent?.trim() ?? '';
-              if (!cinema || cinema.length < 3) return;
-
-              const times: { time: string; format: string; lang: string }[] = [];
-              block.querySelectorAll('button, a[href*="comprar"], [class*="hora"], [class*="time"]').forEach((btn) => {
-                const text = btn.textContent?.trim() ?? '';
-                const m = text.match(/\d{1,2}:\d{2}/);
-                if (!m) return;
-                const ctx = btn.closest('[class*="format"],[class*="tipo"]')?.textContent
-                  ?? btn.parentElement?.textContent ?? '';
-                times.push({
-                  time: m[0],
-                  format: ctx.match(/\b(IMAX|4DX|3D|2D|XD)\b/i)?.[1]?.toUpperCase() ?? '2D',
-                  lang: ctx.toLowerCase().includes('dob') ? 'doblada' : 'subtitulada',
-                });
-              });
-              if (times.length > 0) result.push({ cinema, times });
             });
 
-            return result;
-          });
-
-          if (domSedes.length > 0) {
-            console.log(`      ✅ ${domSedes.length} sedes via DOM`);
-            for (const { cinema: cinemaName, times } of domSedes) {
-              const cinemaId = await getOrCreateCinema(cinemaName, cityId);
-              if (!cinemaId) continue;
-              for (const sched of times) {
-                const startTime = `${today}T${sched.time.padStart(5, '0')}:00`;
-                await supabase.from('screenings').upsert(
-                  {
-                    movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
-                    format: sched.format, language: sched.lang, buy_url: null,
-                  },
-                  { onConflict: 'movie_id,cinema_id,start_time' }
-                );
-              }
-            }
-          }
-
-          // Process intercepted API data from movie page
-          for (const { url, body } of movieApiData) {
-            const cinemas: any[] = body?.cinemas ?? body?.theaters ?? body?.venues ?? [];
-            if (cinemas.length > 0) {
-              console.log(`      📡 ${cinemas.length} sedes en API movie: ${url.substring(0, 60)}`);
-              for (const c of cinemas) {
-                const cinemaName = c.name ?? c.nombre ?? '';
-                if (!cinemaName) continue;
+            if (domSedes.length > 0) {
+              console.log(`      ✅ ${domSedes.length} sedes via DOM`);
+              for (const { cinema: cinemaName, times } of domSedes) {
                 const cinemaId = await getOrCreateCinema(cinemaName, cityId);
                 if (!cinemaId) continue;
-                const times: any[] = c.schedules ?? c.showtimes ?? c.horarios ?? [];
-                for (const t of times) {
-                  const rawTime = t.time ?? t.hora ?? '';
-                  if (!rawTime) continue;
-                  const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
-                    ? `${today}T${rawTime.padStart(5, '0')}:00` : rawTime;
-                  await supabase.from('screenings').upsert(
-                    {
-                      movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
-                      format: t.format ?? '2D', language: t.language ?? 'subtitulada', buy_url: null,
-                    },
-                    { onConflict: 'movie_id,cinema_id,start_time' }
-                  );
+                for (const sched of times) {
+                  await supabase.from('screenings').upsert({
+                    movie_id: movie.id, cinema_id: cinemaId,
+                    start_time: `${today}T${sched.time.padStart(5, '0')}:00`,
+                    format: sched.format, language: sched.lang, buy_url: null,
+                  }, { onConflict: 'movie_id,cinema_id,start_time' });
                 }
               }
             }
           }
 
         } catch (err) {
-          console.error(`      ❌ Error en página de ${title}:`, (err as Error).message);
+          console.error(`      ❌ ${title}:`, (err as Error).message);
         } finally {
           await moviePage.unroute('**/*');
           await moviePage.close();
         }
-
         await new Promise(r => setTimeout(r, 800));
       }
     }

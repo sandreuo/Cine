@@ -1,3 +1,9 @@
+/**
+ * CineColombia scraper
+ * Strategy: Next.js /_next/data/ API calls bypass Cloudflare entirely.
+ * We first fetch the HTML minimally to get the build ID, then call JSON endpoints directly.
+ * Fallback: Playwright if build ID fetch fails.
+ */
 import { chromium } from 'playwright';
 import { supabaseAdmin as supabase } from '../lib/supabase-admin';
 import dotenv from 'dotenv';
@@ -5,55 +11,62 @@ import path from 'path';
 
 dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
-const CITIES: Record<string, string> = {
-  bogota: 'bogota',
-  medellin: 'medellin',
-  cali: 'cali',
-  barranquilla: 'barranquilla',
-  bucaramanga: 'bucaramanga',
-  cartagena: 'cartagena',
+const today = new Date().toISOString().split('T')[0];
+const BASE = 'https://www.cinecolombia.com';
+
+const CITIES = ['bogota', 'medellin', 'cali', 'barranquilla', 'bucaramanga', 'cartagena'];
+
+const CITY_NAMES: Record<string, string> = {
+  bogota: 'Bogotá', medellin: 'Medellín', cali: 'Cali',
+  barranquilla: 'Barranquilla', bucaramanga: 'Bucaramanga', cartagena: 'Cartagena',
 };
 
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
+  return text.toLowerCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
 function cleanTitle(raw: string): string {
-  return raw
-    .replace(/[\s\n\r]+/g, ' ')
+  return raw.replace(/[\s\n\r]+/g, ' ')
     .replace(/\s*\(?\s*(DOB|SUB|DUBBED|SUBTITULAD[AO])\s*(2D|3D|IMAX|4DX|XD)?\s*\)?\s*$/i, '')
-    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '')
-    .trim();
+    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '').trim();
 }
 
 const GARBAGE_PATTERNS = [
-  /^(top[\s-]+)?banner/i,
-  /^horario[\s-]+apertura/i,
-  /\bmembership\b/i,
-  /\bactivated\b/i,
-  /\bworld[\s-]+tour\b/i,
-  /\blive[\s-]+viewing\b/i,
-  /arirang/i,
-  /^bts\b/i,
-  /^standar(d)?$/i,
+  /^(top[\s-]+)?banner/i, /^horario[\s-]+apertura/i, /\bmembership\b/i,
+  /\bactivated\b/i, /\bworld[\s-]+tour\b/i, /\blive[\s-]+viewing\b/i,
+  /arirang/i, /^bts\b/i, /^standar(d)?$/i, /^cine[\s-]club/i,
+  /^todas las pel/i,
 ];
 
 function isValidMovieTitle(title: string): boolean {
-  if (!title || title.trim().length < 3) return false;
+  if (!title || title.trim().length < 2) return false;
   return !GARBAGE_PATTERNS.some(p => p.test(title.trim()));
+}
+
+function normalizeFormat(raw: string): string {
+  const f = (raw ?? '').toUpperCase();
+  if (f.includes('IMAX')) return 'IMAX';
+  if (f.includes('4DX')) return '4DX';
+  if (f.includes('XD')) return 'XD';
+  if (f.includes('PREMIUM')) return 'PREMIUM';
+  if (f.includes('3D')) return '3D';
+  return '2D';
+}
+
+function normalizeLanguage(raw: string): 'subtitulada' | 'doblada' | 'original' {
+  const l = (raw ?? '').toLowerCase();
+  if (l.includes('dob') || l.includes('dub')) return 'doblada';
+  if (l.includes('orig')) return 'original';
+  return 'subtitulada';
 }
 
 async function getOrCreateCity(slug: string): Promise<number | null> {
   const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
   if (data) return data.id;
-  const name = slug.charAt(0).toUpperCase() + slug.slice(1);
+  const name = CITY_NAMES[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
   const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
-  if (error) { console.error(`Error creando ciudad ${slug}:`, error.message); return null; }
+  if (error) { console.error(`Error ciudad ${slug}:`, error.message); return null; }
   return c?.id ?? null;
 }
 
@@ -62,13 +75,156 @@ async function getOrCreateCinema(name: string, cityId: number): Promise<number |
   if (data) return data.id;
   const { data: c, error } = await supabase.from('cinemas')
     .insert({ name, city_id: cityId, chain: 'cinecolombia' }).select('id').single();
-  if (error) { console.error(`Error creando cine ${name}:`, error.message); return null; }
+  if (error) { console.error(`Error cine ${name}:`, error.message); return null; }
   return c?.id ?? null;
+}
+
+// Try to fetch Next.js build ID from the page HTML (a small plain fetch, not full browser)
+async function getNextBuildId(): Promise<string | null> {
+  try {
+    const html = await fetch(`${BASE}/bogota/cartelera`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'es-CO,es;q=0.9',
+      },
+    }).then(r => r.text()).catch(() => null);
+
+    if (!html) return null;
+
+    // Next.js embeds build ID in __NEXT_DATA__ as {"buildId":"..."}
+    const match = html.match(/"buildId"\s*:\s*"([^"]+)"/);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Fetch Next.js JSON data endpoint directly
+async function fetchNextData(buildId: string, pagePath: string): Promise<any | null> {
+  const url = `${BASE}/_next/data/${buildId}${pagePath}.json`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'es-CO,es;q=0.9',
+        'x-nextjs-data': '1',
+      },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function processShowings(showings: any[], movieId: number, defaultCitySlug: string) {
+  for (const showing of showings) {
+    const cinemaName: string = showing.cinema?.name ?? showing.cinema?.nombre ??
+      showing.theater?.name ?? showing.nombre ?? showing.name ?? '';
+    if (!cinemaName) continue;
+
+    const rawCity: string = showing.cinema?.city?.slug ?? showing.cinema?.ciudad?.slug ??
+      showing.ciudad ?? showing.city ?? '';
+    const citySlug = rawCity
+      ? CITIES.find(c => rawCity.toLowerCase().includes(c)) ?? defaultCitySlug
+      : defaultCitySlug;
+
+    const cityId = await getOrCreateCity(citySlug);
+    if (!cityId) continue;
+    const cinemaId = await getOrCreateCinema(cinemaName, cityId);
+    if (!cinemaId) continue;
+
+    const schedules: any[] = showing.schedules ?? showing.horarios ??
+      showing.funciones ?? (showing.time ?? showing.hora ? [showing] : []);
+
+    for (const sched of schedules) {
+      const rawTime: string = sched.time ?? sched.hora ?? sched.start_time ?? '';
+      if (!rawTime) continue;
+      const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
+        ? `${today}T${rawTime.padStart(5, '0')}:00` : rawTime;
+
+      await supabase.from('screenings').upsert({
+        movie_id: movieId, cinema_id: cinemaId, start_time: startTime,
+        format: normalizeFormat(sched.format ?? sched.tipo ?? sched.sala ?? '2D'),
+        language: normalizeLanguage(sched.language ?? sched.idioma ?? 'subtitulada'),
+        buy_url: sched.buy_url ?? null,
+      }, { onConflict: 'movie_id,cinema_id,start_time' });
+    }
+  }
 }
 
 export async function scrapeCineColombia() {
   console.log('🎬 Iniciando scraper de CINE COLOMBIA...');
 
+  // ── STRATEGY 1: Next.js data API (bypasses Cloudflare) ───────────────────
+  const buildId = await getNextBuildId();
+  if (buildId) {
+    console.log(`   Build ID: ${buildId}`);
+    let apiSuccess = false;
+
+    for (const city of CITIES) {
+      console.log(`   📍 ${city}`);
+      const data = await fetchNextData(buildId, `/${city}/cartelera`);
+      if (!data) {
+        console.log(`      ⚠️  Sin datos JSON`);
+        continue;
+      }
+
+      const pp = data?.pageProps ?? {};
+      console.log(`      pageProps keys: ${Object.keys(pp).join(', ')}`);
+
+      const rawMovies: any[] = pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.content?.movies ?? [];
+      console.log(`      ${rawMovies.length} películas`);
+
+      for (const m of rawMovies) {
+        const title = cleanTitle(m.title ?? m.titulo ?? '');
+        if (!isValidMovieTitle(title)) continue;
+
+        const movieSlug = m.slug ?? m.url_slug ?? slugify(title);
+        const { data: movie } = await supabase.from('movies').upsert({
+          slug: movieSlug, title,
+          poster_url: m.poster_url ?? m.poster ?? m.image ?? null,
+          description: m.synopsis ?? m.sinopsis ?? m.description ?? null,
+          duration_minutes: parseInt(String(m.duration ?? m.duracion ?? '0')) || null,
+          rating: m.rating ?? m.clasificacion ?? null,
+          genres: (m.genres ?? m.generos ?? []).map((g: any) => g?.name ?? g?.nombre ?? g ?? ''),
+        }, { onConflict: 'slug' }).select('id').single();
+
+        if (!movie) continue;
+        apiSuccess = true;
+
+        // Try to get per-movie showings from the movie detail JSON endpoint
+        const code = m.code ?? m.id ?? m.film_id ?? m.HO ?? '';
+        if (m.slug && code) {
+          const movieData = await fetchNextData(buildId, `/films/${m.slug}/${code}/`);
+          const mpp = movieData?.pageProps ?? {};
+          const showings: any[] = mpp.showings ?? mpp.screenings ?? mpp.functions ?? [];
+          if (showings.length > 0) {
+            await processShowings(showings, movie.id, city);
+            console.log(`      🎥 ${title}: ${showings.length} sedes`);
+          }
+        }
+
+        // Also process showings embedded in cartelera item
+        const embeddedShowings: any[] = m.showings ?? m.screenings ?? m.funciones ?? [];
+        if (embeddedShowings.length > 0) {
+          await processShowings(embeddedShowings, movie.id, city);
+        }
+      }
+    }
+
+    if (apiSuccess) {
+      console.log('✅ Cine Colombia Scraper finalizado (vía Next.js API).');
+      return;
+    }
+    console.log('   ⚠️  API sin datos útiles, usando Playwright...');
+  } else {
+    console.log('   ⚠️  No se obtuvo buildId, usando Playwright...');
+  }
+
+  // ── STRATEGY 2: Playwright with all captured APIs ─────────────────────────
   const browser = await chromium.launch({
     headless: true,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox'],
@@ -77,7 +233,6 @@ export async function scrapeCineColombia() {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     extraHTTPHeaders: {
       'Accept-Language': 'es-CO,es;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
@@ -89,291 +244,159 @@ export async function scrapeCineColombia() {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
-  const today = new Date().toISOString().split('T')[0];
-
   try {
-    // ── STEP 1: Get movie list from Bogotá cartelera ─────────────────────
-    // We only scrape cartelera once (Bogotá) to get the movie list + codes.
-    // Then for each movie we get ALL sedes (nationwide on their movie page).
+    // Load Bogotá cartelera and capture ALL API calls
+    const allApiData: { url: string; body: any }[] = [];
     const cartelaPage = await context.newPage();
-    console.log('   Cargando cartelera de Bogotá...');
+
+    await cartelaPage.route('**/*', async (route, request) => {
+      const response = await route.fetch();
+      const ct = response.headers()['content-type'] ?? '';
+      if (ct.includes('application/json')) {
+        try { allApiData.push({ url: request.url(), body: await response.json() }); } catch { /* ignore */ }
+      }
+      await route.fulfill({ response });
+    });
+
     try {
-      await cartelaPage.goto('https://www.cinecolombia.com/bogota/cartelera', {
-        waitUntil: 'networkidle', timeout: 60000,
-      });
+      await cartelaPage.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'networkidle', timeout: 60000 });
     } catch {
-      await cartelaPage.goto('https://www.cinecolombia.com/bogota/cartelera', {
-        waitUntil: 'domcontentloaded', timeout: 45000,
-      });
+      await cartelaPage.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'domcontentloaded', timeout: 45000 });
     }
     await cartelaPage.waitForTimeout(5000);
 
     const title = await cartelaPage.title();
     console.log(`   Título: "${title}"`);
 
-    if (title.toLowerCase().includes('just a moment') || title.toLowerCase().includes('cloudflare')) {
-      console.log('   ⚠️  Cloudflare bloqueó el acceso. Saltando Cine Colombia.');
+    if (title.toLowerCase().includes('just a moment') || title.toLowerCase().includes('cloudflare') || title.toLowerCase().includes('un momento')) {
+      console.log('   ⚠️  Cloudflare activo. Logeando APIs capturadas antes del bloqueo:');
+      for (const { url, body } of allApiData) {
+        console.log(`      📡 ${url.substring(0, 100)}`);
+      }
       await cartelaPage.close();
       await browser.close();
+      console.log('✅ Cine Colombia Scraper finalizado (bloqueado por Cloudflare).');
       return;
     }
 
-    // Extract movie list with slugs and codes from __NEXT_DATA__ or DOM
+    // Log all captured APIs for structure discovery
+    console.log(`   ${allApiData.length} APIs capturadas:`);
+    for (const { url, body } of allApiData) {
+      console.log(`   📡 ${url.substring(0, 100)}`);
+      console.log(`      ${JSON.stringify(body).substring(0, 200)}`);
+    }
+
+    // Extract movie refs from __NEXT_DATA__ or DOM
     const movieRefs: { slug: string; code: string; title: string }[] = await cartelaPage.evaluate(() => {
       const refs: { slug: string; code: string; title: string }[] = [];
 
-      // Try __NEXT_DATA__ first
       const nd = document.getElementById('__NEXT_DATA__');
       if (nd) {
         try {
           const data = JSON.parse(nd.textContent ?? '{}');
           const pp = data?.props?.pageProps ?? {};
-          console.log('pageProps keys:', Object.keys(pp).join(', '));
-
-          const movies: any[] =
-            pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.content?.movies ?? [];
-
+          const movies: any[] = pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.content?.movies ?? [];
           movies.forEach((m: any) => {
             const slug = m.slug ?? m.url_slug ?? '';
-            const code = m.code ?? m.id ?? m.film_id ?? m.HO ?? '';
+            const code = String(m.code ?? m.id ?? m.film_id ?? m.HO ?? '');
             const t = m.title ?? m.titulo ?? '';
-            if (slug || code) refs.push({ slug, code: String(code), title: t });
+            if (slug || code) refs.push({ slug, code, title: t });
           });
           if (refs.length > 0) return refs;
         } catch { /* ignore */ }
       }
 
-      // DOM fallback: find movie links like /films/{slug}/{code}/
       document.querySelectorAll('a[href*="/films/"]').forEach((a) => {
         const href = (a as HTMLAnchorElement).href;
         const match = href.match(/\/films\/([^/]+)\/([^/]+)\//);
-        if (match) {
-          const slug = match[1];
-          const code = match[2];
-          const title = a.querySelector('h2,h3,h4,[class*="title"]')?.textContent?.trim()
-            ?? a.textContent?.trim() ?? slug;
-          if (!refs.find(r => r.code === code)) refs.push({ slug, code, title });
-        }
-      });
-
-      // Also try /pelicula/ links
-      document.querySelectorAll('a[href*="/pelicula/"]').forEach((a) => {
-        const href = (a as HTMLAnchorElement).href;
-        const match = href.match(/\/pelicula\/([^/]+)/);
-        if (match) {
-          const slug = match[1];
-          const title = a.querySelector('h2,h3,h4,[class*="title"]')?.textContent?.trim()
-            ?? a.textContent?.trim() ?? slug;
-          if (!refs.find(r => r.slug === slug)) refs.push({ slug, code: '', title });
+        if (match && !refs.find(r => r.code === match[2])) {
+          const t = a.querySelector('h2,h3,h4,[class*="title"]')?.textContent?.trim() ?? match[1];
+          refs.push({ slug: match[1], code: match[2], title: t });
         }
       });
 
       return refs;
     });
 
-    // Clean and filter movie refs
     const cleanedRefs = movieRefs
       .map(r => ({ ...r, title: cleanTitle(r.title) }))
       .filter(r => isValidMovieTitle(r.title));
 
-    console.log(`   ${cleanedRefs.length} películas válidas (de ${movieRefs.length} encontradas)`);
+    console.log(`   ${cleanedRefs.length} películas válidas`);
     await cartelaPage.close();
 
-    if (cleanedRefs.length === 0) {
-      console.log('   ❌ No se pudo obtener listado de películas. Cloudflare o cambio de estructura.');
-      await browser.close();
-      return;
-    }
-
-    // ── STEP 2: For each movie, scrape its detail page for ALL sedes ──────
     for (const ref of cleanedRefs) {
-      const { slug, code, title } = ref;
+      const { slug, code, title: refTitle } = ref;
+      const movieSlug = slug || slugify(refTitle);
 
-      // Upsert movie skeleton first
-      const movieSlug = slug || slugify(title);
       const { data: movie } = await supabase.from('movies').upsert(
-        { slug: movieSlug, title },
-        { onConflict: 'slug' }
+        { slug: movieSlug, title: refTitle }, { onConflict: 'slug' }
       ).select('id').single();
       if (!movie) continue;
 
-      // Navigate to movie detail page (their URL uses /films/{slug}/{code}/ or /bogota/pelicula/{slug})
       const movieUrl = code
-        ? `https://www.cinecolombia.com/films/${slug}/${code}/`
-        : `https://www.cinecolombia.com/bogota/pelicula/${slug}`;
+        ? `${BASE}/films/${slug}/${code}/`
+        : `${BASE}/bogota/pelicula/${slug}`;
 
       const moviePage = await context.newPage();
-      console.log(`   🎥 ${title} → ${movieUrl}`);
+      const movieApiData: { url: string; body: any }[] = [];
+
+      await moviePage.route('**/*', async (route, request) => {
+        const response = await route.fetch();
+        const ct = response.headers()['content-type'] ?? '';
+        if (ct.includes('application/json')) {
+          try { movieApiData.push({ url: request.url(), body: await response.json() }); } catch { /* ignore */ }
+        }
+        await route.fulfill({ response });
+      });
+
+      console.log(`   🎥 ${refTitle}`);
       try {
         await moviePage.goto(movieUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
         await moviePage.waitForTimeout(4000);
 
-        // First try __NEXT_DATA__ for structured data
-        const pageNd = await moviePage.evaluate(() => {
-          const el = document.getElementById('__NEXT_DATA__');
-          return el?.textContent ?? null;
-        });
-
-        if (pageNd) {
-          const nd = JSON.parse(pageNd);
+        const movieNd = await moviePage.evaluate(() => document.getElementById('__NEXT_DATA__')?.textContent ?? null);
+        if (movieNd) {
+          const nd = JSON.parse(movieNd);
           const pp = nd?.props?.pageProps ?? {};
-          // Update movie with full data
           const m = pp.movie ?? pp.film ?? pp.data ?? {};
+
           if (m.title || m.poster_url || m.synopsis) {
             await supabase.from('movies').update({
-              title: m.title ?? m.titulo ?? title,
+              title: cleanTitle(m.title ?? m.titulo ?? refTitle),
               poster_url: m.poster_url ?? m.poster ?? m.image ?? null,
-              description: m.synopsis ?? m.description ?? m.sinopsis ?? null,
-              duration_minutes: parseInt(m.duration ?? m.duracion ?? '0') || null,
+              description: m.synopsis ?? m.sinopsis ?? m.description ?? null,
+              duration_minutes: parseInt(String(m.duration ?? m.duracion ?? '0')) || null,
               rating: m.rating ?? m.clasificacion ?? null,
               genres: (m.genres ?? m.generos ?? []).map((g: any) => g?.name ?? g ?? ''),
             }).eq('id', movie.id);
           }
 
-          // Get showings: structured as [{cinema: {name}, schedules: [{time, format, language}]}]
-          const showings: any[] =
-            pp.showings ?? pp.screenings ?? pp.functions ?? pp.showtimes ??
+          const showings: any[] = pp.showings ?? pp.screenings ?? pp.functions ?? pp.showtimes ??
             m.showings ?? m.screenings ?? [];
-
-          for (const showing of showings) {
-            const cinemaName: string =
-              showing.cinema?.name ?? showing.cinema?.nombre ??
-              showing.theater?.name ?? showing.name ?? '';
-            if (!cinemaName) continue;
-
-            // Map cinema to city
-            const cinemaCity: string =
-              showing.cinema?.city?.slug ?? showing.cinema?.ciudad?.slug ?? '';
-            const citySlug = Object.keys(CITIES).find(k => cinemaCity.includes(k)) ?? 'bogota';
-            const cityId = await getOrCreateCity(citySlug);
-            if (!cityId) continue;
-            const cinemaId = await getOrCreateCinema(cinemaName, cityId);
-            if (!cinemaId) continue;
-
-            const schedules: any[] =
-              showing.schedules ?? showing.horarios ?? (showing.time ? [showing] : []);
-            for (const sched of schedules) {
-              const rawTime: string = sched.time ?? sched.hora ?? sched.start_time ?? '';
-              if (!rawTime) continue;
-              const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
-                ? `${today}T${rawTime.padStart(5, '0')}:00`
-                : rawTime;
-              await supabase.from('screenings').upsert(
-                {
-                  movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
-                  format: sched.format ?? sched.formato ?? '2D',
-                  language: sched.language ?? sched.idioma ?? (sched.dubbed ? 'doblada' : 'subtitulada'),
-                  buy_url: null,
-                },
-                { onConflict: 'movie_id,cinema_id,start_time' }
-              );
-            }
+          if (showings.length > 0) {
+            await processShowings(showings, movie.id, 'bogota');
+            console.log(`      ✅ ${showings.length} sedes`);
           }
         }
 
-        // ── DOM scraping: reads the rendered cinema blocks ──────────────
-        // CineColombia renders: <section/div per cinema> → cinema name heading → time buttons
-        const domSedes = await moviePage.evaluate(() => {
-          const result: { cinema: string; times: { time: string; format: string; lang: string }[] }[] = [];
-
-          // Their page groups by cinema/sede with headings
-          // Try several selector strategies
-          const cinemaSelectors = [
-            '[class*="complejo"]', '[class*="cinema"]', '[class*="theater"]',
-            '[class*="sede"]', '[class*="venue"]', 'section[id]',
-          ];
-
-          let cinemaEls: Element[] = [];
-          for (const sel of cinemaSelectors) {
-            const found = Array.from(document.querySelectorAll(sel));
-            if (found.length > 0) { cinemaEls = found; break; }
-          }
-
-          cinemaEls.forEach((el) => {
-            // Get cinema name from heading
-            const heading = el.querySelector('h1,h2,h3,h4,[class*="name"],[class*="nombre"],[class*="title"]');
-            const cinema = heading?.textContent?.trim() ?? '';
-            if (!cinema || cinema.length < 3) return;
-
-            // Get times from buttons/links
-            const times: { time: string; format: string; lang: string }[] = [];
-            el.querySelectorAll('button, a[href*="comprar"], a[href*="buy"], [class*="hora"], [class*="time"], [class*="schedule"]').forEach((btn) => {
-              const text = btn.textContent?.trim() ?? '';
-              const timeMatch = text.match(/\d{1,2}:\d{2}/);
-              if (!timeMatch) return;
-
-              // Look for format/language context in parent or sibling elements
-              const parent = btn.closest('[class*="format"], [class*="tipo"], [class*="sala"]') ?? btn.parentElement;
-              const parentText = parent?.textContent ?? '';
-              const format = parentText.match(/\b(IMAX|4DX|3D|2D|XD|Premium)\b/i)?.[1]?.toUpperCase() ?? '2D';
-              const lang = parentText.toLowerCase().includes('dob') ? 'doblada' : 'subtitulada';
-
-              times.push({ time: timeMatch[0], format, lang });
-            });
-
-            if (times.length > 0) result.push({ cinema, times });
-          });
-
-          // If nothing found via section selectors, try reading ALL time buttons and guess cinema from proximity
-          if (result.length === 0) {
-            // Find all cinema headings followed by time blocks
-            const allH = Array.from(document.querySelectorAll('h2, h3, h4'));
-            allH.forEach((h) => {
-              const name = h.textContent?.trim() ?? '';
-              // Cinema names are usually uppercase and > 5 chars
-              if (name.length < 5 || name !== name.toUpperCase()) return;
-
-              const times: { time: string; format: string; lang: string }[] = [];
-              let next = h.nextElementSibling;
-              while (next && !['H2', 'H3', 'H4'].includes(next.tagName)) {
-                next.querySelectorAll('button, a').forEach((btn) => {
-                  const t = btn.textContent?.trim() ?? '';
-                  const m = t.match(/\d{1,2}:\d{2}/);
-                  if (m) times.push({ time: m[0], format: '2D', lang: 'subtitulada' });
-                });
-                next = next.nextElementSibling;
-              }
-              if (times.length > 0) result.push({ cinema: name, times });
-            });
-          }
-
-          return result;
-        });
-
-        console.log(`      ${domSedes.length} sedes en DOM`);
-
-        for (const { cinema: cinemaName, times } of domSedes) {
-          // We don't know the city per sede from DOM alone — assume movie's city context
-          // Default to bogota, but log for review
-          const cityId = await getOrCreateCity('bogota');
-          if (!cityId) continue;
-          const cinemaId = await getOrCreateCinema(cinemaName, cityId);
-          if (!cinemaId) continue;
-
-          for (const sched of times) {
-            const startTime = `${today}T${sched.time.padStart(5, '0')}:00`;
-            await supabase.from('screenings').upsert(
-              {
-                movie_id: movie.id, cinema_id: cinemaId, start_time: startTime,
-                format: sched.format, language: sched.lang, buy_url: null,
-              },
-              { onConflict: 'movie_id,cinema_id,start_time' }
-            );
-          }
+        // Log movie page APIs for debugging
+        for (const { url, body: apiBody } of movieApiData) {
+          console.log(`      📡 ${url.substring(0, 100)}`);
+          console.log(`         ${JSON.stringify(apiBody).substring(0, 200)}`);
         }
 
       } catch (err) {
-        console.error(`      ❌ Error procesando ${title}:`, err);
+        console.error(`      ❌ ${refTitle}:`, (err as Error).message);
       } finally {
+        await moviePage.unroute('**/*');
         await moviePage.close();
       }
-
-      // Small delay between movie pages
       await new Promise(r => setTimeout(r, 1000));
     }
 
   } catch (err) {
-    console.error('❌ Error fatal en Cine Colombia Scraper:', err);
+    console.error('❌ Error fatal:', err);
   } finally {
     await browser.close();
     console.log('\n✅ Cine Colombia Scraper finalizado.');
