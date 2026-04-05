@@ -151,6 +151,7 @@ export default async function MoviePage({ params }: { params: { slug: string } }
                 screenings={screenings || []}
                 movieTitle={movie.title}
                 movieSlug={movie.slug}
+                releaseDate={movie.release_date}
               />
             </div>
           </section>

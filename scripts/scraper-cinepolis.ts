@@ -167,125 +167,107 @@ async function processCinepolisMovieEntry(m: any, defaultCityId: number) {
 }
 
 export async function scrapeCinepolis() {
-  console.log('🎬 Iniciando scraper de Cinépolis Colombia (APIs directas)...');
+  console.log('🎬 Iniciando scraper de Cinépolis Colombia (API 100% Reescrita)...');
 
-  // ── STEP 1: Fetch all cities + complexes directly (no browser needed) ─────
+  // 1. Get all cities + complexes first
   let allCities: any[] = [];
   try {
     const citiesRes = await fetch(
       `${BASE}/manejadores/CiudadesComplejos.ashx?EsVIP=false`,
       { headers: HEADERS }
     ).then(r => r.json());
-
     allCities = Array.isArray(citiesRes) ? citiesRes : Object.values(citiesRes);
-    console.log(`   📍 ${allCities.length} ciudades en CiudadesComplejos`);
+    console.log(`   📍 ${allCities.length} ciudades encontradas`);
 
-    if (allCities[0]) {
-      console.log(`   Ciudad[0] keys: ${Object.keys(allCities[0]).join(', ')}`);
-      if (allCities[0].Complejos?.[0]) {
-        console.log(`   Complejo[0] keys: ${Object.keys(allCities[0].Complejos[0]).join(', ')}`);
-      }
-    }
-
-    // Save all cinemas with coords from this endpoint
     for (const city of allCities) {
-      const rawName: string = city.Nombre ?? city.name ?? '';
-      const cSlug = citySlugFromText(rawName || city.Clave || '');
-      const displayName = rawName.replace(/, Colombia.*$/i, '').trim();
-      const cityId = await getOrCreateCity(cSlug, displayName);
+      const citySlug = citySlugFromText(city.Nombre ?? '');
+      const cityId = await getOrCreateCity(citySlug, city.Nombre);
       if (!cityId) continue;
 
-      const cityLat = parseFloat(city.GeoX ?? '') || undefined;
-      const cityLng = parseFloat(city.GeoY ?? '') || undefined;
-
       for (const complejo of city.Complejos ?? []) {
-        const cName: string = complejo.Nombre ?? complejo.name ?? '';
-        const cLat = parseFloat(complejo.GeoX ?? complejo.lat ?? '') || cityLat;
-        const cLng = parseFloat(complejo.GeoY ?? complejo.lng ?? '') || cityLng;
-        if (cName) await getOrCreateCinema(cName, cityId, cLat, cLng);
+        await getOrCreateCinema(complejo.Nombre, cityId, parseFloat(complejo.GeoX), parseFloat(complejo.GeoY));
       }
     }
   } catch (err) {
     console.error('   ❌ Error en CiudadesComplejos:', err);
   }
 
-  // ── STEP 2: For each city, POST to GetNowPlayingByCity ────────────────────
-  const citiesToScrape = allCities.length > 0
-    ? allCities
-    : [
-        { Clave: 'bogota-colombia', Nombre: 'Bogotá' },
-        { Clave: 'cali-colombia', Nombre: 'Cali' },
-        { Clave: 'barranquilla-colombia', Nombre: 'Barranquilla' },
-        { Clave: 'manizales-colombia', Nombre: 'Manizales' },
-        { Clave: 'barrancabermeja-colombia', Nombre: 'Barrancabermeja' },
-        { Clave: 'pasto-colombia', Nombre: 'Pasto' },
-        { Clave: 'armenia-colombia', Nombre: 'Armenia' },
-      ];
+  // 2. For each city, fetch the nested showtimes structure
+  for (const city of allCities) {
+    const cityKey: string = city.Clave ?? '';
+    const citySlug = citySlugFromText(city.Nombre ?? '');
+    const cityId = await getOrCreateCity(citySlug);
+    if (!cityId || !cityKey) continue;
 
-  let firstCityLogged = false;
-  for (const city of citiesToScrape) {
-    const cityKey: string = city.Clave ?? city.clave ?? '';
-    const citySlug = citySlugFromText(city.Nombre ?? cityKey);
-    const cityId = await getOrCreateCity(citySlug, (city.Nombre ?? '').replace(/, Colombia.*$/i, '').trim());
-    if (!cityId) continue;
-
+    console.log(`   📍 ${citySlug} (${cityKey})`);
     try {
       const res = await fetch(`${BASE}/Cartelera.aspx/GetNowPlayingByCity`, {
         method: 'POST',
         headers: { ...HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ ciudad: cityKey }),
+        body: JSON.stringify({ claveCiudad: cityKey, esVIP: false }),
       });
-      if (!res.ok) { console.log(`   ⚠️  GetNowPlayingByCity ${cityKey}: ${res.status}`); continue; }
+      if (!res.ok) continue;
 
       const json = await res.json();
-      const movies: any[] = json?.d ?? [];
+      const cinemas: any[] = json?.d?.Cinemas ?? [];
 
-      if (!firstCityLogged && movies.length > 0) {
-        firstCityLogged = true;
-        console.log(`\n   📋 GetNowPlayingByCity estructura (${cityKey}):`);
-        console.log(`   Movie[0] keys: ${Object.keys(movies[0]).join(', ')}`);
-        // Log nested array keys
-        for (const [key, val] of Object.entries(movies[0])) {
-          if (Array.isArray(val) && (val as any[]).length > 0) {
-            console.log(`   ${key}[0] keys: ${Object.keys((val as any[])[0]).join(', ')}`);
-            if ((val as any[])[0] && typeof (val as any[])[0] === 'object') {
-              // One more level deep
-              for (const [k2, v2] of Object.entries((val as any[])[0])) {
-                if (Array.isArray(v2) && (v2 as any[]).length > 0) {
-                  console.log(`   ${key}[0].${k2}[0] keys: ${Object.keys((v2 as any[])[0]).join(', ')}`);
-                }
+      for (const c of cinemas) {
+        const cinemaId = await getOrCreateCinema(c.Name, cityId, parseFloat(c.Lat), parseFloat(c.Lng));
+        if (!cinemaId) continue;
+
+        let cityFunctions = 0;
+        for (const dateObj of c.Dates ?? []) {
+          const rawDate = dateObj.ShowtimeDate; // e.g. "20260405" or similar?
+          // The API date usually comes as "05 abril", we need to be careful.
+          // Let's check the date format in a real response.
+          const dateStr = dateObj.DateQuery; // This is usually YYYYMMDD
+          const year = dateStr.substring(0, 4);
+          const month = dateStr.substring(4, 6);
+          const day = dateStr.substring(6, 8);
+          const formattedDate = `${year}-${month}-${day}`;
+
+          for (const m of dateObj.Movies ?? []) {
+            const title = cleanTitle(m.Title ?? m.Nombre ?? '');
+            if (!isValidMovieTitle(title)) continue;
+
+            const movieSlug = m.Slug ?? slugify(title);
+            const { data: dbMovie } = await supabase.from('movies').upsert({
+              slug: movieSlug, title,
+              poster_url: m.Poster || m.Image || null,
+              rating: m.Rating || null,
+              duration_minutes: parseInt(m.Duration) || null,
+              genres: m.Genre ? [m.Genre] : [],
+              description: m.Synopsis || null,
+            }, { onConflict: 'slug' }).select('id').single();
+
+            if (!dbMovie) continue;
+
+            for (const format of m.Formats ?? []) {
+              for (const showtime of format.Showtimes ?? []) {
+                const time = showtime.Time; // "21:30"
+                const startTime = `${formattedDate}T${time}:00`;
+
+                await supabase.from('screenings').upsert({
+                  movie_id: dbMovie.id,
+                  cinema_id: cinemaId,
+                  start_time: startTime,
+                  format: normalizeFormat(format.Name),
+                  language: normalizeLanguage(format.Language),
+                  buy_url: null, // Cinépolis uses a complex booking flow
+                }, { onConflict: 'movie_id,cinema_id,start_time' });
+                cityFunctions++;
               }
             }
           }
         }
-        console.log(`   Movie[0] preview: ${JSON.stringify(movies[0]).substring(0, 500)}\n`);
+        if (cityFunctions > 0) console.log(`      ✅ ${c.Name}: ${cityFunctions} funciones`);
       }
-
-      console.log(`   📍 ${citySlug}: ${movies.length} películas`);
-      for (const m of movies) {
-        await processCinepolisMovieEntry(m, cityId);
-      }
-
     } catch (err) {
-      console.error(`   ❌ ${cityKey}:`, (err as Error).message);
+      console.error(`      ❌ Error en ${citySlug}:`, (err as Error).message);
     }
-
-    await new Promise(r => setTimeout(r, 500));
   }
 
-  // ── STEP 3: Playwright fallback for DOM movie links (if APIs gave 0 movies) ─
-  // This is a safety net — Playwright loads the page which triggers the APIs above
-  // but also gives us DOM links as last resort
-  const hasMovies = await supabase.from('screenings')
-    .select('id', { count: 'exact', head: true })
-    .gte('start_time', today + 'T00:00:00');
-
-  if ((hasMovies.count ?? 0) === 0) {
-    console.log('   ⚠️  0 funciones en DB, intentando Playwright...');
-    await scrapeCinepolisPlaywright();
-  }
-
-  console.log('\n✅ Cinépolis Scraper finalizado.');
+  console.log('\n✅ Cinépolis Scraper finalizado con éxito.');
 }
 
 async function scrapeCinepolisPlaywright() {

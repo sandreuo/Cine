@@ -41,9 +41,10 @@ interface Props {
   screenings: Screening[];
   movieTitle: string;
   movieSlug: string;
+  releaseDate?: string | null;
 }
 
-export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: Props) {
+export default function ScreeningsClient({ screenings, movieTitle, movieSlug, releaseDate }: Props) {
   const chains = Array.from(
     new Set(screenings.map((s) => (s.cinemas as any)?.chain).filter(Boolean))
   ) as string[];
@@ -101,11 +102,17 @@ export default function ScreeningsClient({ screenings, movieTitle, movieSlug }: 
   }
 
   if (screenings.length === 0) {
+    const isPresale = releaseDate && new Date(releaseDate) > new Date();
+    
     return (
       <div className="empty-state" style={{ border: '1px solid var(--border)', borderRadius: '12px' }}>
-        <div className="icon">😢</div>
-        <h3>No hay funciones registradas hoy</h3>
-        <p>Aún no tenemos los horarios de esta película para el día de hoy.</p>
+        <div className="icon">{isPresale ? '🎫' : '😢'}</div>
+        <h3>{isPresale ? '¡Próximamente en Preventa!' : 'No hay funciones registradas hoy'}</h3>
+        <p>
+          {isPresale 
+            ? `Esta película se estrenará el ${new Date(releaseDate!).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })}. ¡Pronto tendremos funciones!` 
+            : 'Aún no tenemos los horarios de esta película para el día de hoy.'}
+        </p>
       </div>
     );
   }

@@ -29,6 +29,18 @@ function cleanTitle(raw: string): string {
     .trim();
 }
 
+const GARBAGE_PATTERNS = [
+  /^(top[\s-]+)?banner/i, /^horario[\s-]+apertura/i, /\bmembership\b/i,
+  /\bactivated\b/i, /\bworld[\s-]+tour\b/i, /\blive[\s-]+viewing\b/i,
+  /arirang/i, /^bts\b/i, /^standar(d)?$/i, /^cine[\s-]club/i,
+  /^todas las pel/i, /^disponibles?$/i,
+];
+
+function isValidMovieTitle(title: string): boolean {
+  if (!title || title.trim().length < 2) return false;
+  return !GARBAGE_PATTERNS.some(p => p.test(title.trim()));
+}
+
 function normalizeFormat(raw: string): string {
   const f = (raw ?? '').toUpperCase();
   if (f.includes('IMAX')) return 'IMAX';
@@ -46,48 +58,24 @@ function normalizeLanguage(raw: string): 'subtitulada' | 'doblada' | 'original' 
   return 'subtitulada';
 }
 
-const CITY_SLUG_MAP: Record<string, string> = {
-  bogota: 'bogota', bogotá: 'bogota',
-  medellin: 'medellin', medellín: 'medellin',
-  cali: 'cali', barranquilla: 'barranquilla',
-  bucaramanga: 'bucaramanga', cartagena: 'cartagena',
-  pereira: 'pereira', manizales: 'manizales',
-  cucuta: 'cucuta', cúcuta: 'cucuta',
-  villavicencio: 'villavicencio', ibague: 'ibague', ibagué: 'ibague',
-  pasto: 'pasto', neiva: 'neiva', armenia: 'armenia',
+// Map of our city slugs to Procinal internal IDs
+const PROCINAL_CITIES: Record<string, number> = {
+  'soacha': 4,
+  'cartagena': 2,
+  'bogota': 1,
+  'medellin': 5,
+  'villavicencio': 3,
+  'barrancabermeja': 6
 };
 
+// Map of city slug to display name
 const CITY_NAMES: Record<string, string> = {
-  bogota: 'Bogotá', medellin: 'Medellín', cali: 'Cali',
-  barranquilla: 'Barranquilla', bucaramanga: 'Bucaramanga',
-  cartagena: 'Cartagena', pereira: 'Pereira', manizales: 'Manizales',
-  cucuta: 'Cúcuta', villavicencio: 'Villavicencio', ibague: 'Ibagué',
-  pasto: 'Pasto', neiva: 'Neiva', armenia: 'Armenia',
+  'bogota': 'Bogotá', 'medellin': 'Medellín', 'cali': 'Cali',
+  'barranquilla': 'Barranquilla', 'bucaramanga': 'Bucaramanga',
+  'cartagena': 'Cartagena', 'pereira': 'Pereira', 'manizales': 'Manizales',
+  'villavicencio': 'Villavicencio', 'barrancabermeja': 'Barrancabermeja',
+  'soacha': 'Soacha'
 };
-
-function citySlugFromText(text: string): string {
-  const norm = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-  return CITY_SLUG_MAP[norm] ?? norm.replace(/\s+/g, '-');
-}
-
-async function getOrCreateCity(slug: string): Promise<number | null> {
-  const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
-  if (data) return data.id;
-  const name = CITY_NAMES[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
-  const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
-  if (error) { console.error('Error ciudad:', error.message); return null; }
-  return c?.id ?? null;
-}
-
-async function getOrCreateCinema(name: string, cityId: number, address?: string): Promise<number | null> {
-  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
-  if (data) return data.id;
-  const { data: c, error } = await supabase.from('cinemas')
-    .insert({ name, city_id: cityId, chain: 'procinal', address: address ?? null })
-    .select('id').single();
-  if (error) { console.error('Error cine:', error.message); return null; }
-  return c?.id ?? null;
-}
 
 async function apiFetch(url: string): Promise<any | null> {
   try {
@@ -99,160 +87,98 @@ async function apiFetch(url: string): Promise<any | null> {
   }
 }
 
-export async function scrapeProcinal() {
-  console.log('🎬 Iniciando scraper de Procinal Colombia...');
-
-  // ── Step 1: Cinema map ────────────────────────────────────────────────────
-  const cinemasRes = await apiFetch(`${API}/api/cinemas`);
-  const cinemaList: any[] = Array.isArray(cinemasRes) ? cinemasRes : cinemasRes?.data ?? [];
-  console.log(`  ${cinemaList.length} cines en /api/cinemas`);
-
-  if (cinemaList[0]) console.log(`  Cinema[0] keys: ${Object.keys(cinemaList[0]).join(', ')}`);
-
-  const cinemaMap: Record<string, { name: string; citySlug: string; address: string }> = {};
-  for (const c of cinemaList) {
-    const id = String(c.id ?? c._id ?? c.score_id ?? '');
-    const name = c.nombre_completo ?? c.nombre ?? c.name ?? '';
-    const rawCity = c.ciudad ?? c.city ?? c.ciudad_nombre ?? c.complemento ?? '';
-    const citySlug = citySlugFromText(rawCity);
-    const address = c.direccion ?? c.address ?? '';
-    if (id && name) cinemaMap[id] = { name, citySlug, address };
-  }
-  console.log(`  ${Object.keys(cinemaMap).length} cines mapeados`);
-
-  // ── Step 2: Movie list from /api/site ────────────────────────────────────
-  const siteData = await apiFetch(`${API}/api/site`);
-  const siteMovies: any[] = siteData?.movies_active ?? siteData?.movies ?? [];
-  console.log(`  ${siteMovies.length} películas en /api/site`);
-  if (siteMovies[0]) console.log(`  Movie[0] keys: ${Object.keys(siteMovies[0]).join(', ')}`);
-
-  // ── Step 3: Try cartelera endpoints ──────────────────────────────────────
-  let cartelaMovies: any[] = [];
-  const cartelaEndpoints = [
-    `${API}/api/contents/cartelera`,
-    `${API}/api/cartelera`,
-    `${API}/api/movies`,
-    `${API}/api/contents/movies`,
-  ];
-  for (const ep of cartelaEndpoints) {
-    const data = await apiFetch(ep);
-    const list: any[] = Array.isArray(data) ? data : data?.data ?? data?.movies ?? data?.films ?? data?.contents ?? [];
-    if (list.length > 0) {
-      console.log(`  ✅ ${list.length} películas en ${ep}`);
-      cartelaMovies = list;
-      break;
-    }
-  }
-
-  const allMovies = cartelaMovies.length > 0 ? cartelaMovies : siteMovies;
-
-  // ── Step 4: Per-movie funciones ───────────────────────────────────────────
-  let firstFuncionesLogged = false;
-  for (const m of allMovies) {
-    const title = cleanTitle(m.titulo ?? m.title ?? m.nombre ?? m.name ?? '');
-    if (!title) continue;
-    const slug = m.slug ?? slugify(title);
-    const movieId = m.id ?? m._id ?? m.movie_id;
-
-    const { data: movie } = await supabase.from('movies').upsert({
-      slug, title,
-      poster_url: m.imagen ?? m.image ?? m.poster_url ?? m.poster ?? null,
-      description: m.sinopsis ?? m.synopsis ?? m.description ?? null,
-      duration_minutes: parseInt(String(m.duracion ?? m.duration ?? '0')) || null,
-      rating: m.clasificacion ?? m.rating ?? null,
-      genres: (m.generos ?? m.genres ?? []).map((g: any) => g?.nombre ?? g?.name ?? g ?? ''),
-    }, { onConflict: 'slug' }).select('id').single();
-
-    if (!movie || !movieId) continue;
-
-    // Try all known funciones endpoint patterns
-    const funcEndpoints = [
-      `${API}/api/contents/funciones/${movieId}`,
-      `${API}/api/contents/funciones/${slug}`,
-      `${API}/api/funciones/${movieId}`,
-      `${API}/api/movies/${movieId}/funciones`,
-      `${API}/api/movies/${movieId}/showtimes`,
-      `${API}/api/site/funciones/${movieId}`,
-    ];
-
-    let funciones: any[] = [];
-    for (const ep of funcEndpoints) {
-      const data = await apiFetch(ep);
-      if (!data) continue;
-      const list: any[] = Array.isArray(data) ? data
-        : data?.data ?? data?.funciones ?? data?.functions ?? data?.showtimes ?? [];
-      if (list.length > 0) {
-        if (!firstFuncionesLogged) {
-          firstFuncionesLogged = true;
-          console.log(`  ✅ Funciones endpoint: ${ep}`);
-          console.log(`  Funcion[0] keys: ${Object.keys(list[0]).join(', ')}`);
-          console.log(`  Funcion[0] preview: ${JSON.stringify(list[0]).substring(0, 400)}`);
-        }
-        funciones = list;
-        break;
-      }
-    }
-
-    if (funciones.length === 0) {
-      // Try showings embedded in the movie object from /api/site
-      funciones = m.funciones ?? m.functions ?? m.showings ?? m.horarios ?? [];
-    }
-
-    console.log(`  🎥 ${title}: ${funciones.length} funciones`);
-
-    for (const f of funciones) {
-      await processProcinalFuncion(f, movie.id, cinemaMap);
-    }
-  }
-
-  // ── Step 5: Try per-cinema endpoint ──────────────────────────────────────
-  if (!firstFuncionesLogged) {
-    console.log('  ⚠️  Ningún endpoint de funciones funcionó. Intentando por cinema...');
-    for (const [cinemaId] of Object.entries(cinemaMap)) {
-      const data = await apiFetch(`${API}/api/cinemas/${cinemaId}/funciones`);
-      if (!data) continue;
-      const list: any[] = Array.isArray(data) ? data : data?.data ?? data?.funciones ?? [];
-      if (list.length > 0) {
-        console.log(`  ✅ Funciones por cinema: /api/cinemas/${cinemaId}/funciones → ${list.length} funciones`);
-        console.log(`  Funcion[0] keys: ${Object.keys(list[0]).join(', ')}`);
-        console.log(`  Funcion[0] preview: ${JSON.stringify(list[0]).substring(0, 400)}`);
-        break;
-      }
-    }
-  }
-
-  console.log('✅ Procinal Scraper finalizado.');
+async function getOrCreateCity(slug: string): Promise<number | null> {
+  const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
+  if (data) return data.id;
+  const name = CITY_NAMES[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+  const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
+  if (error) { console.error(`Error ciudad ${slug}:`, error.message); return null; }
+  return c?.id ?? null;
 }
 
-async function processProcinalFuncion(
-  f: any,
-  movieDbId: number,
-  cinemaMap: Record<string, { name: string; citySlug: string; address: string }>,
-) {
-  const cinemaRef = String(f.cine_id ?? f.cinema_id ?? f.cinemaId ?? f.complejo_id ?? f.sede_id ?? '');
-  let cinemaName: string = f.cine ?? f.cine_nombre ?? f.cinema?.nombre ?? f.cinema_nombre ?? cinemaMap[cinemaRef]?.name ?? '';
-  const rawCity: string = f.ciudad ?? f.city ?? cinemaMap[cinemaRef]?.citySlug ?? '';
-  const citySlug = rawCity ? citySlugFromText(rawCity) : 'bogota';
-  const address: string = cinemaMap[cinemaRef]?.address ?? '';
+async function getOrCreateCinema(name: string, cityId: number, address?: string): Promise<number | null> {
+  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
+  if (data) return data.id;
+  const { data: c, error } = await supabase.from('cinemas')
+    .insert({ name, city_id: cityId, chain: 'procinal', address: address ?? null })
+    .select('id').single();
+  if (error) { console.error(`Error cine ${name}:`, error.message); return null; }
+  return c?.id ?? null;
+}
 
-  if (!cinemaName && cinemaRef && cinemaMap[cinemaRef]) cinemaName = cinemaMap[cinemaRef].name;
-  if (!cinemaName) return;
+export async function scrapeProcinal() {
+  console.log('🎬 Iniciando scraper de Procinal Colombia (API 100% Reescrita)...');
 
-  const cityId = await getOrCreateCity(citySlug);
-  if (!cityId) return;
-  const cinemaId = await getOrCreateCinema(cinemaName, cityId, address);
-  if (!cinemaId) return;
+  // 1. Map cinemas to internal IDs to know their names/locations
+  const cinemasRes = await apiFetch(`${API}/api/cinemas`);
+  const cinemaList: any[] = Array.isArray(cinemasRes) ? cinemasRes : cinemasRes?.data ?? [];
+  const cinemaInfoMap: Record<number, { name: string; address: string }> = {};
+  for (const c of cinemaList) {
+    if (c.id && c.nombre) {
+      cinemaInfoMap[c.id] = { name: c.nombre_completo ?? c.nombre, address: c.direccion ?? '' };
+    }
+  }
 
-  const rawTime: string = f.hora ?? f.time ?? f.horario ?? f.start_time ?? f.datetime ?? f.fecha_hora ?? '';
-  if (!rawTime) return;
+  // 2. Scrape each supported city
+  for (const [citySlug, procinalCityId] of Object.entries(PROCINAL_CITIES)) {
+    console.log(`   📍 ${citySlug}`);
+    const cityId = await getOrCreateCity(citySlug);
+    if (!cityId) continue;
 
-  const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
-    ? `${today}T${rawTime.padStart(5, '0')}:00` : rawTime;
+    const data = await apiFetch(`${API}/api/movies?city=${procinalCityId}`);
+    const movies: any[] = data?.movies ?? [];
+    console.log(`      ${movies.length} películas encontradas`);
 
-  await supabase.from('screenings').upsert({
-    movie_id: movieDbId, cinema_id: cinemaId, start_time: startTime,
-    format: normalizeFormat(f.sala ?? f.format ?? f.formato ?? f.tipo ?? '2D'),
-    language: normalizeLanguage(f.idioma ?? f.language ?? f.tipo_idioma ?? 'subtitulada'),
-    buy_url: f.url_compra ?? f.buy_url ?? null,
-  }, { onConflict: 'movie_id,cinema_id,start_time' });
+    for (const m of movies) {
+      const title = cleanTitle(m.titulo ?? m.title ?? '');
+      if (!isValidMovieTitle(title)) continue;
+
+      const slug = m.slug ?? slugify(title);
+      const { data: dbMovie } = await supabase.from('movies').upsert({
+        slug, title,
+        poster_url: m.imagen ?? m.poster ?? null,
+        description: m.sinopsis ?? m.description ?? null,
+        duration_minutes: parseInt(String(m.duracion ?? '0')) || null,
+        rating: m.clasificacion ?? null,
+        genres: (m.generos ?? []).map((g: any) => g?.nombre ?? g ?? ''),
+      }, { onConflict: 'slug' }).select('id').single();
+
+      if (!dbMovie) continue;
+
+      let totalFunctions = 0;
+      for (const room of m.rooms ?? []) {
+        const procinalCinemaId = room.cinema_id;
+        const info = cinemaInfoMap[procinalCinemaId];
+        if (!info) continue;
+
+        const cinemaId = await getOrCreateCinema(info.name, cityId, info.address);
+        if (!cinemaId) continue;
+
+        for (const showtime of room.showtimes_list ?? []) {
+          const date = showtime.fecha_funcion; // YYYY-MM-DD
+          const time = showtime.hora_funcion;  // HH:MM:SS
+          if (!date || !time) continue;
+
+          const startTime = `${date}T${time}`;
+
+          await supabase.from('screenings').upsert({
+            movie_id: dbMovie.id,
+            cinema_id: cinemaId,
+            start_time: startTime,
+            format: normalizeFormat(showtime.tipo_sala ?? '2D'),
+            language: normalizeLanguage(showtime.tipo_idioma ?? 'subtitulada'),
+            buy_url: showtime.link_bi ?? null,
+          }, { onConflict: 'movie_id,cinema_id,start_time' });
+          totalFunctions++;
+        }
+      }
+      if (totalFunctions > 0) console.log(`      🎥 ${title}: ${totalFunctions} funciones`);
+    }
+  }
+
+  console.log('✅ Procinal Scraper finalizado con éxito (API 100%).');
+}
+
+async function processProcinalFuncion() {
+  // Logic merged into scrapeProcinal
 }

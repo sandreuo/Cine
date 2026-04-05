@@ -187,14 +187,20 @@ async function deduplicateByTmdbId() {
     for (const dup of duplicates) {
       console.log(`      - "${dup.title}" (id:${dup.id})`);
 
-      const { error: scErr } = await supabase
-        .from('screenings')
-        .update({ movie_id: canonical.id })
-        .eq('movie_id', dup.id);
-
-      if (scErr) {
-        console.error(`      ❌ Error reasignando screenings de ${dup.id}:`, scErr.message);
-        continue;
+      // Reassign screenings one by one to handle conflicts
+      const { data: dupScreenings } = await supabase.from('screenings').select('id, cinema_id, start_time').eq('movie_id', dup.id);
+      if (dupScreenings) {
+        for (const s of dupScreenings) {
+          const { error: updErr } = await supabase
+            .from('screenings')
+            .update({ movie_id: canonical.id })
+            .eq('id', s.id);
+          
+          if (updErr && updErr.code === '23505') { // Unique violation
+            // Screening already exists for canonical, so just delete this duplicate
+            await supabase.from('screenings').delete().eq('id', s.id);
+          }
+        }
       }
 
       const { error: delErr } = await supabase

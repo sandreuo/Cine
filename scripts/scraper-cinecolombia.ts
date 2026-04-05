@@ -79,23 +79,33 @@ async function getOrCreateCinema(name: string, cityId: number): Promise<number |
   return c?.id ?? null;
 }
 
-// Try to fetch Next.js build ID from the page HTML (a small plain fetch, not full browser)
+// Try to fetch Next.js build ID from the page HTML using Playwright to bypass basic Cloudflare
 async function getNextBuildId(): Promise<string | null> {
+  console.log('   🔍 Obteniendo Build ID via Playwright...');
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  });
+  const page = await context.newPage();
+  
   try {
-    const html = await fetch(`${BASE}/bogota/cartelera`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html',
-        'Accept-Language': 'es-CO,es;q=0.9',
-      },
-    }).then(r => r.text()).catch(() => null);
-
-    if (!html) return null;
-
-    // Next.js embeds build ID in __NEXT_DATA__ as {"buildId":"..."}
-    const match = html.match(/"buildId"\s*:\s*"([^"]+)"/);
-    return match?.[1] ?? null;
-  } catch {
+    // Go to a simple page that likely has the build ID
+    await page.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2000);
+    
+    const buildId = await page.evaluate(() => {
+      try {
+        return JSON.parse(document.getElementById('__NEXT_DATA__')?.textContent || '{}').buildId;
+      } catch {
+        return null;
+      }
+    });
+    
+    await browser.close();
+    return buildId || null;
+  } catch (err) {
+    console.error('      ❌ Error obteniendo buildId:', (err as Error).message);
+    await browser.close();
     return null;
   }
 }
