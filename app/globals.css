@@ -483,15 +483,39 @@ button {
   position: absolute;
   top: 8px;
   left: 8px;
-  background: var(--gold);
-  color: #0a0a0f;
-  font-size: 0.65rem;
-  font-weight: 800;
+  background: linear-gradient(135deg, var(--gold), #ff9900);
+  color: #000;
+  font-size: 0.6rem;
+  font-weight: 900;
   padding: 3px 8px;
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  z-index: 5;
   letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+
+.movie-presale-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: linear-gradient(135deg, #0056b3, #00bfff);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 900;
+  padding: 3px 8px;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  z-index: 4;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Offset if both exist */
+.movie-presale-badge + .movie-new-badge {
+  top: 32px;
 }
 
 .movie-release-date {

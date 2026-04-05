@@ -98,6 +98,8 @@ async function upsertCinemarkMovie(m: any): Promise<number | null> {
     duration_minutes: parseInt(String(m.RunTime ?? m.duration ?? '0')) || null,
     rating: m.Rating ?? m.RatingAlt ?? m.rating ?? null,
     genres: m.GenreName ? [m.GenreName] : [],
+    is_estreno: m.IsRelease === true || m.Premiere === true || m.IsPremiere === true,
+    is_preventa: m.IsPresale === true || m.Presale === true,
   }, { onConflict: 'slug' }).select('id').single();
 
   if (error) { console.error(`Error upsert ${title}:`, error.message); return null; }
