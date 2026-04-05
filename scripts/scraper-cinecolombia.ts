@@ -54,25 +54,35 @@ function slugify(text: any): string {
     .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+const CITY_MAP: Record<string, string> = {
+  bogota: 'bogota', medellin: 'medellin', cali: 'cali',
+  barranquilla: 'barranquilla', bucaramanga: 'bucaramanga', cartagena: 'cartagena',
+  manizales: 'manizales', pereira: 'pereira', cucuta: 'cucuta',
+  villavicencio: 'villavicencio', monteria: 'monteria', armenia: 'armenia',
+  pasto: 'pasto', ibague: 'ibague', neiva: 'neiva', 'santa marta': 'santa-marta',
+  palmira: 'palmira', chia: 'chia', zipaquira: 'zipaquira',
+  girardot: 'girardot', rionegro: 'rionegro', sincelejo: 'sincelejo',
+  // Municipios del área metropolitana → ciudad principal
+  soledad: 'barranquilla',
+  envigado: 'medellin', sabaneta: 'medellin', itagui: 'medellin',
+  bello: 'medellin', copacabana: 'medellin', caldas: 'medellin',
+  floridablanca: 'bucaramanga', piedecuesta: 'bucaramanga', giron: 'bucaramanga',
+  yumbo: 'cali', jamundi: 'cali',
+  cota: 'bogota', soacha: 'bogota', mosquera: 'bogota', funza: 'bogota',
+};
+
+// Returns a known city slug if text matches, or '' if no match found.
 function citySlugFromText(text: string): string {
   const n = (text ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-  const MAP: Record<string, string> = {
-    bogota: 'bogota', medellin: 'medellin', cali: 'cali',
-    barranquilla: 'barranquilla', bucaramanga: 'bucaramanga', cartagena: 'cartagena',
-    manizales: 'manizales', pereira: 'pereira', cucuta: 'cucuta',
-    villavicencio: 'villavicencio', monteria: 'monteria', armenia: 'armenia',
-    pasto: 'pasto', ibague: 'ibague', neiva: 'neiva', 'santa marta': 'santa-marta',
-    palmira: 'palmira', chia: 'chia', zipaquira: 'zipaquira',
-    girardot: 'girardot', rionegro: 'rionegro', sincelejo: 'sincelejo',
-    // Municipios del área metropolitana → ciudad principal
-    soledad: 'barranquilla',
-    envigado: 'medellin', sabaneta: 'medellin', itagui: 'medellin',
-    bello: 'medellin', copacabana: 'medellin', caldas: 'medellin',
-    floridablanca: 'bucaramanga', piedecuesta: 'bucaramanga', giron: 'bucaramanga',
-    yumbo: 'cali', jamundi: 'cali',
-    cota: 'bogota',
-  };
-  return MAP[n] ?? slugify(n) ?? 'bogota';
+  if (!n) return '';
+  // Exact match
+  if (CITY_MAP[n]) return CITY_MAP[n];
+  // Word-level match: split by spaces and check each word
+  const words = n.split(/\s+/);
+  for (const word of words) {
+    if (CITY_MAP[word]) return CITY_MAP[word];
+  }
+  return '';
 }
 
 function normalizeFormat(raw: string): string {
@@ -124,8 +134,19 @@ async function getOrCreateCity(slug: string, displayName?: string): Promise<numb
 async function getOrCreateCinema(
   name: string, cityId: number, lat?: number, lng?: number, address?: string
 ): Promise<number | null> {
+  // First look for exact match (name + city)
   const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
   if (data) return (data as any).id;
+
+  // Check if the cinema exists with a different city (e.g., wrongly assigned to Bogotá before)
+  const { data: existing } = await supabase.from('cinemas').select('id, city_id').eq('name', name).eq('chain', CHAIN).single();
+  if (existing) {
+    // Update city to the correct one
+    await supabase.from('cinemas').update({ city_id: cityId }).eq('id', (existing as any).id);
+    console.log(`   🔧 Ciudad corregida para "${name}"`);
+    return (existing as any).id;
+  }
+
   const { data: c, error } = await supabase.from('cinemas').insert({
     name, city_id: cityId, chain: CHAIN,
     lat: lat ?? null, lng: lng ?? null,
@@ -349,7 +370,9 @@ export async function scrapeCineColombia() {
 
     const name: string = extractText(s.Name ?? s.name ?? s.SiteName) || `CineColombia ${siteId}`;
     const rawCity: string = extractText(s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region);
-    const citySlug = rawCity ? citySlugFromText(rawCity) : 'bogota';
+    // Priority: 1) known city from API field, 2) known city from cinema name,
+    // 3) unknown city from API (slugified as-is), 4) bogota as last resort
+    const citySlug = citySlugFromText(rawCity) || citySlugFromText(name) || (rawCity ? slugify(rawCity) : '') || 'bogota';
     const cityDisplay: string = rawCity || citySlug;
     const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
     const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
