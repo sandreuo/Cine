@@ -49,37 +49,47 @@ async function searchTMDB(query: string, region?: string): Promise<any | null> {
   return search.results?.[0] ?? null;
 }
 
-// Spanish → English title mappings for known problematic cases
+// Spanish title → English/original title for known hard cases
 const TITLE_OVERRIDES: Record<string, string> = {
-  'cabra': 'goat',
-  'la cabra': 'the goat',
+  'goat: como cabras': 'goat',
+  'como cabras': 'goat',
+  'hoppers: operacion castor': 'hoppers',
+  'esa cosa con alas': 'that thing with feathers',
+  'noche de miedo': 'fear street',
+  'proyecto fin del mundo': 'project hail mary',
 };
 
 // Multiple search strategies to maximize TMDB hit rate
 async function findOnTMDB(title: string, slug: string): Promise<any | null> {
+  const titleLower = title.toLowerCase().trim();
+
   // Build candidate queries in priority order
   const candidates: string[] = [title];
 
   // Without leading Spanish articles
-  const noArticle = title.replace(/^(El|La|Los|Las|Un|Una)\s+/i, '').trim();
+  const noArticle = title.replace(/^(El|La|Los|Las|Un|Una|The|A)\s+/i, '').trim();
   if (noArticle && noArticle !== title) candidates.push(noArticle);
 
   // Slug as words — sometimes the slug is closer to original English title
   if (slug) {
-    const fromSlug = slug.replace(/-/g, ' ').trim();
-    if (fromSlug && fromSlug !== title.toLowerCase()) candidates.push(fromSlug);
+    const fromSlug = slug.replace(/-/g, ' ').replace(/^reestreno\s*/i, '').trim();
+    if (fromSlug && fromSlug !== titleLower) candidates.push(fromSlug);
   }
 
   // Strip subtitle after colon (broad match)
   const noSubtitle = title.replace(/\s*:.*$/, '').trim();
   if (noSubtitle && noSubtitle !== title && noSubtitle.length >= 3) candidates.push(noSubtitle);
 
-  // Known overrides (Spanish abbreviations → English full title)
-  const override = TITLE_OVERRIDES[title.toLowerCase().trim()];
-  if (override) candidates.push(override);
+  // Strip "REESTRENO" prefix if present
+  const noReestreno = title.replace(/^REESTRENO\s*[-–]?\s*/i, '').trim();
+  if (noReestreno !== title) candidates.push(noReestreno);
 
-  // Also try uppercase acronym as-is (e.g. "GOAT", "F1")
-  if (/^[A-Z0-9.]{2,6}$/.test(title.trim())) candidates.push(title.trim());
+  // Known overrides
+  const override = TITLE_OVERRIDES[titleLower];
+  if (override) candidates.unshift(override); // try first
+
+  // Uppercase acronym as-is (e.g. "GOAT", "F1")
+  if (/^[A-Z0-9.]{2,8}$/.test(title.trim())) candidates.push(title.trim());
 
   // Deduplicate
   const unique = Array.from(new Set(candidates));
