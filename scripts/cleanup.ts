@@ -24,31 +24,33 @@ async function cleanup() {
     console.log(`   ✅ ${sCount ?? 0} funciones pasadas eliminadas.`);
   }
 
-  // 2. Identify movies with no future screenings
-  // We do this by getting all movie IDs that HAVE future screenings and then deleting the rest
-  const { data: activeMovies } = await supabase
-    .from('screenings')
-    .select('movie_id');
-  
-  const activeIds = Array.from(new Set((activeMovies || []).map(s => s.movie_id)));
-  
-  // Delete movies not in activeIds and NOT in a "presale/upcoming" status 
-  // (though currently we identify them by them having no screenings)
-  const { count: mCount, error: mErr } = await supabase
-    .from('movies')
-    .delete({ count: 'exact' })
-    .not('id', 'in', `(${activeIds.join(',')})`);
+  // 2. Identify movies with no future screenings — paginate to avoid 1000-row Supabase limit
+  const activeIds = new Set<number>();
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data: page } = await supabase
+      .from('screenings')
+      .select('movie_id')
+      .range(from, from + PAGE - 1);
+    if (!page?.length) break;
+    page.forEach(s => activeIds.add(s.movie_id));
+    if (page.length < PAGE) break;
+    from += PAGE;
+  }
 
-  if (mErr) {
-    // If activeIds is empty, the 'in' clause might fail. Handle that.
-    if (activeIds.length === 0) {
-       const { count: allCount } = await supabase.from('movies').delete({ count: 'exact' });
-       console.log(`   ✅ ${allCount ?? 0} películas sin funciones eliminadas (limpieza total).`);
-    } else {
-       console.error('❌ Error limpiando películas:', mErr.message);
-    }
+  if (activeIds.size === 0) {
+    console.log('   ⚠️  Sin funciones en DB, omitiendo limpieza de películas.');
   } else {
-    console.log(`   ✅ ${mCount ?? 0} películas sin funciones eliminadas.`);
+    const { count: mCount, error: mErr } = await supabase
+      .from('movies')
+      .delete({ count: 'exact' })
+      .not('id', 'in', `(${Array.from(activeIds).join(',')})`);
+    if (mErr) {
+      console.error('❌ Error limpiando películas:', mErr.message);
+    } else {
+      console.log(`   ✅ ${mCount ?? 0} películas sin funciones eliminadas.`);
+    }
   }
 
   console.log('✨ Limpieza completada.');
