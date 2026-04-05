@@ -57,14 +57,21 @@ async function getOrCreateCinema(name: string, cityId: number): Promise<number |
   return c?.id ?? null;
 }
 
-// Cinépolis Colombia city slugs
-const CITIES: Record<string, string> = {
+// Known Cinépolis cities as fallback (expanded list)
+const CITIES_FALLBACK: Record<string, string> = {
   'bogota-colombia': 'bogota',
   'medellin-colombia': 'medellin',
   'cali-colombia': 'cali',
   'barranquilla-colombia': 'barranquilla',
   'bucaramanga-colombia': 'bucaramanga',
   'cartagena-colombia': 'cartagena',
+  'pereira-colombia': 'pereira',
+  'manizales-colombia': 'manizales',
+  'ibague-colombia': 'ibague',
+  'cucuta-colombia': 'cucuta',
+  'villavicencio-colombia': 'villavicencio',
+  'santa-marta-colombia': 'santa-marta',
+  'monteria-colombia': 'monteria',
 };
 
 const today = new Date().toISOString().split('T')[0];
@@ -86,9 +93,9 @@ export async function scrapeCinepolis() {
   });
 
   try {
-    for (const [cinepolisSlug, dbSlug] of Object.entries(CITIES)) {
+    for (const [cinepolisSlug, dbSlug] of Object.entries(CITIES_FALLBACK)) {
       console.log(`\n📍 Scrapeando Cinépolis: ${dbSlug}`);
-      const cityId = await getOrCreateCity(dbSlug);
+      const cityId = await getOrCreateCity(dbSlug as string);
       if (!cityId) continue;
 
       // ── STEP 1: Load city cartelera, capture API calls & get movie list ──

@@ -8,6 +8,7 @@ import { scrapeCinemark } from './scraper-cinemark';
 import { scrapeCinepolis } from './scraper-cinepolis';
 import { scrapeProcinal } from './scraper-procinal';
 import { enrichWithTMDB } from './enricher-tmdb';
+import { geocodeCinemas } from './geocoder';
 
 async function main() {
   console.log('🎬 Iniciando Scraper Global de CineHoy...');
@@ -19,6 +20,7 @@ async function main() {
   await scrapeCinepolis();
   await scrapeProcinal();
   await enrichWithTMDB();
+  await geocodeCinemas(); // enrich new cinemas with lat/lng via Nominatim
 
   console.log('✅ Scraping completado con éxito.');
 }
