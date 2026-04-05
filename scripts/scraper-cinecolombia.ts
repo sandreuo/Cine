@@ -134,17 +134,25 @@ async function getOrCreateCity(slug: string, displayName?: string): Promise<numb
 async function getOrCreateCinema(
   name: string, cityId: number, lat?: number, lng?: number, address?: string
 ): Promise<number | null> {
-  // First look for exact match (name + city)
-  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
-  if (data) return (data as any).id;
+  // Fetch all existing rows for this cinema name + chain (may have duplicates or wrong city)
+  const { data: rows } = await supabase.from('cinemas').select('id, city_id').eq('name', name).eq('chain', CHAIN);
+  const existing = rows ?? [];
 
-  // Check if the cinema exists with a different city (e.g., wrongly assigned to Bogotá before)
-  const { data: existing } = await supabase.from('cinemas').select('id, city_id').eq('name', name).eq('chain', CHAIN).single();
-  if (existing) {
-    // Update city to the correct one
-    await supabase.from('cinemas').update({ city_id: cityId }).eq('id', (existing as any).id);
-    console.log(`   🔧 Ciudad corregida para "${name}"`);
-    return (existing as any).id;
+  if (existing.length > 0) {
+    // Keep the first row as canonical, delete duplicates (moving their screenings first)
+    const [canonical, ...duplicates] = existing;
+    for (const dup of duplicates) {
+      await supabase.from('screenings').update({ cinema_id: (canonical as any).id }).eq('cinema_id', (dup as any).id);
+      await supabase.from('cinemas').delete().eq('id', (dup as any).id);
+    }
+    if (duplicates.length > 0) console.log(`   🧹 ${duplicates.length} duplicado(s) eliminado(s) para "${name}"`);
+
+    // Update city if wrong
+    if ((canonical as any).city_id !== cityId) {
+      await supabase.from('cinemas').update({ city_id: cityId }).eq('id', (canonical as any).id);
+      console.log(`   🔧 Ciudad corregida para "${name}"`);
+    }
+    return (canonical as any).id;
   }
 
   const { data: c, error } = await supabase.from('cinemas').insert({
@@ -370,9 +378,10 @@ export async function scrapeCineColombia() {
 
     const name: string = extractText(s.Name ?? s.name ?? s.SiteName) || `CineColombia ${siteId}`;
     const rawCity: string = extractText(s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region);
-    // Priority: 1) known city from API field, 2) known city from cinema name,
-    // 3) unknown city from API (slugified as-is), 4) bogota as last resort
-    const citySlug = citySlugFromText(rawCity) || citySlugFromText(name) || (rawCity ? slugify(rawCity) : '') || 'colombia';
+    // CineColombia API returns "BOGOTA" for all sites — infer from name first.
+    // Priority: 1) known city from cinema name, 2) known city from API field,
+    // 3) unknown city from API (slugified as-is), 4) colombia as last resort
+    const citySlug = citySlugFromText(name) || citySlugFromText(rawCity) || (rawCity ? slugify(rawCity) : '') || 'colombia';
     const cityDisplay: string = rawCity || citySlug;
     const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
     const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
