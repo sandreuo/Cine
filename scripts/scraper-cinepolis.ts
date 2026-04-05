@@ -259,9 +259,15 @@ export async function scrapeCinepolis() {
             if (!isValidMovieTitle(title)) continue;
 
             const movieSlug = m.Slug ?? m.Key ?? slugify(title);
+
+            // Check if movie already has a poster (e.g. from TMDB) to avoid overwriting with Cinépolis HTTP URLs
+            const { data: existing } = await supabase.from('movies').select('id, poster_url').eq('slug', movieSlug).single();
+            const cinepolisPoster = m.Poster || m.Image || null;
+            const posterToSave = existing?.poster_url ? existing.poster_url : cinepolisPoster;
+
             const { data: dbMovie } = await supabase.from('movies').upsert({
               slug: movieSlug, title,
-              poster_url: m.Poster || m.Image || null,
+              poster_url: posterToSave,
               rating: m.Rating || null,
               duration_minutes: parseInt(m.RunTime ?? m.Duration ?? '0') || null,
               genres: m.Gender ? [m.Gender] : (m.Genre ? [m.Genre] : []),
