@@ -116,14 +116,20 @@ async function enrichMovie(id: number, title: string, slug: string): Promise<num
   const isUpcoming = release_date && release_date > today;
 
   const videos: any[] = details.videos?.results ?? [];
+  // Trailer priority: Spanish Latin (es-419 or es), then any language, then any YouTube
   const trailer =
+    videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es' && v.iso_3166_1 === '419') ??
     videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es') ??
     videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube') ??
     videos.find((v: any) => v.site === 'YouTube');
   const trailerId: string | null = trailer?.key ?? null;
 
+  // Use TMDB's canonical title in Spanish (details.title is in the requested language es-419)
+  const tmdbTitle: string = details.title ?? title;
+
   const { error } = await supabase.from('movies').update({
     tmdb_id: tmdbId,
+    title: tmdbTitle,
     poster_url: poster,
     description,
     duration_minutes: duration,
@@ -143,7 +149,8 @@ async function enrichMovie(id: number, title: string, slug: string): Promise<num
     isUpcoming ? `📅 estreno ${release_date}` : '',
   ].filter(Boolean).join(' · ');
 
-  console.log(`   ✅ ${title} (tmdb:${tmdbId}) — ${flags}`);
+  const titleChanged = tmdbTitle !== title ? ` → "${tmdbTitle}"` : '';
+  console.log(`   ✅ ${title}${titleChanged} (tmdb:${tmdbId}) — ${flags}`);
   return tmdbId;
 }
 
