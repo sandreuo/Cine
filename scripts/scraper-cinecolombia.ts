@@ -62,8 +62,15 @@ function citySlugFromText(text: string): string {
     manizales: 'manizales', pereira: 'pereira', cucuta: 'cucuta',
     villavicencio: 'villavicencio', monteria: 'monteria', armenia: 'armenia',
     pasto: 'pasto', ibague: 'ibague', neiva: 'neiva', 'santa marta': 'santa-marta',
-    palmira: 'palmira', soledad: 'soledad', chia: 'chia', zipaquira: 'zipaquira',
+    palmira: 'palmira', chia: 'chia', zipaquira: 'zipaquira',
     girardot: 'girardot', rionegro: 'rionegro', sincelejo: 'sincelejo',
+    // Municipios del área metropolitana → ciudad principal
+    soledad: 'barranquilla',
+    envigado: 'medellin', sabaneta: 'medellin', itagui: 'medellin',
+    bello: 'medellin', copacabana: 'medellin', caldas: 'medellin',
+    floridablanca: 'bucaramanga', piedecuesta: 'bucaramanga', giron: 'bucaramanga',
+    yumbo: 'cali', jamundi: 'cali',
+    cota: 'bogota',
   };
   return MAP[n] ?? slugify(n) ?? 'bogota';
 }
