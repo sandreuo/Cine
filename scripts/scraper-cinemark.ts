@@ -14,6 +14,31 @@ function slugify(text: string): string {
     .replace(/(^-|-$)/g, '');
 }
 
+function cleanTitle(raw: string): string {
+  return raw
+    .replace(/[\s\n\r]+/g, ' ')
+    .replace(/\s*\(?\s*(DOB|SUB|DUBBED|SUBTITULAD[AO])\s*(2D|3D|IMAX|4DX|XD)?\s*\)?\s*$/i, '')
+    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '')
+    .trim();
+}
+
+const GARBAGE_PATTERNS = [
+  /^(top[\s-]+)?banner/i,
+  /^horario[\s-]+apertura/i,
+  /\bmembership\b/i,
+  /\bactivated\b/i,
+  /\bworld[\s-]+tour\b/i,
+  /\blive[\s-]+viewing\b/i,
+  /arirang/i,
+  /^bts\b/i,
+  /^standar(d)?$/i,
+];
+
+function isValidMovieTitle(title: string): boolean {
+  if (!title || title.trim().length < 3) return false;
+  return !GARBAGE_PATTERNS.some(p => p.test(title.trim()));
+}
+
 async function getOrCreateCity(slug: string): Promise<number | null> {
   const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
   if (data) return data.id;
@@ -232,8 +257,8 @@ export async function scrapeCinemark() {
 }
 
 async function processMovieGlobal(m: any) {
-  const title: string = m.title ?? m.Title ?? m.nombre ?? m.name ?? '';
-  if (!title) return;
+  const title: string = cleanTitle(m.title ?? m.Title ?? m.nombre ?? m.name ?? '');
+  if (!isValidMovieTitle(title)) return;
   const slug = m.slug ?? slugify(title);
   await supabase.from('movies').upsert(
     {
@@ -249,8 +274,8 @@ async function processMovieGlobal(m: any) {
 }
 
 async function processMovie(m: any, cityId: number) {
-  const title: string = m.title ?? m.Title ?? m.nombre ?? m.name ?? '';
-  if (!title) return;
+  const title: string = cleanTitle(m.title ?? m.Title ?? m.nombre ?? m.name ?? '');
+  if (!isValidMovieTitle(title)) return;
   const slug = m.slug ?? slugify(title);
 
   const { data: movie } = await supabase.from('movies').upsert(

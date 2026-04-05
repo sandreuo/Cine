@@ -168,5 +168,28 @@ export async function enrichWithTMDB() {
   // Deduplicate after enrichment
   await deduplicateByTmdbId();
 
+  // Remove ghost movies: no tmdb_id AND no screenings
+  console.log('\n🧹 Eliminando películas fantasma (sin tmdb_id y sin funciones)...');
+  const { data: ghosts } = await supabase
+    .from('movies')
+    .select('id, title, tmdb_id')
+    .is('tmdb_id', null);
+
+  let ghostsDeleted = 0;
+  for (const g of ghosts ?? []) {
+    const { count } = await supabase
+      .from('screenings')
+      .select('id', { count: 'exact', head: true })
+      .eq('movie_id', g.id);
+    if ((count ?? 0) === 0) {
+      const { error } = await supabase.from('movies').delete().eq('id', g.id);
+      if (!error) {
+        console.log(`   🗑️  "${g.title}" (id:${g.id}) — eliminada`);
+        ghostsDeleted++;
+      }
+    }
+  }
+  console.log(`   ✅ ${ghostsDeleted} película(s) fantasma eliminada(s).`);
+
   console.log('✅ Enriquecimiento TMDB finalizado.');
 }
