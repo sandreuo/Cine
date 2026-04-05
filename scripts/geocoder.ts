@@ -85,21 +85,43 @@ function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// Extract plain name from Vista Cinema JSON format {"text":"ANDINO","translations":[]}
+function extractCinemaName(raw: string): string {
+  if (!raw) return '';
+  if (raw.startsWith('{')) {
+    try { return JSON.parse(raw)?.text ?? raw; } catch { return raw; }
+  }
+  return raw;
+}
+
 export async function geocodeCinemas() {
   console.log('\n📍 Geocodificando cinemas sin coordenadas...');
+
+  // First: fix any remaining JSON-named cinemas in DB before geocoding
+  const { data: jsonCinemas } = await supabase
+    .from('cinemas').select('id, name').like('name', '{%');
+  for (const c of jsonCinemas ?? []) {
+    const fixed = extractCinemaName(c.name);
+    if (fixed && fixed !== c.name) {
+      await supabase.from('cinemas').update({ name: fixed }).eq('id', c.id);
+      console.log(`   🔧 Nombre corregido: "${c.name}" → "${fixed}"`);
+    }
+  }
 
   const { data: cinemas, error } = await supabase
     .from('cinemas')
     .select('id, name, address, chain, city_id, lat, lng, cities(slug)')
-    .is('lat', null);
+    .is('lat', null)
+    .limit(40); // max 40 per run to stay within timeout (40 × ~3s = ~2min)
 
   if (error || !cinemas) {
     console.error('❌ Error leyendo cinemas:', error?.message);
     return;
   }
 
-  const toGeocode = cinemas.filter(c => !c.lat && !c.lng);
-  console.log(`   ${toGeocode.length} cinemas sin coordenadas`);
+  // Skip cinemas that still have JSON names (shouldn't happen after fix above)
+  const toGeocode = cinemas.filter(c => c.name && !c.name.startsWith('{'));
+  console.log(`   ${toGeocode.length} cinemas a geocodificar (de ${cinemas.length} sin coordenadas)`);
 
   let found = 0;
   let notFound = 0;
