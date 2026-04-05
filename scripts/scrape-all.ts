@@ -24,14 +24,23 @@ async function main() {
   }
 
   // 2. SCRAPE all chains — isolated so one failure doesn't kill the others
+  // SKIP_CINECOLOMBIA=true → skip CineColombia (used in auto GitHub Actions runs)
+  // ONLY_CINECOLOMBIA=true → only run CineColombia (used in manual self-hosted runs)
   console.log('\n📡 Fase 2: Scraping de cadenas...');
+  const skipCC = process.env.SKIP_CINECOLOMBIA === 'true';
+  const onlyCC = process.env.ONLY_CINECOLOMBIA === 'true';
+
   const scrapers: Array<[string, () => Promise<void>]> = [
     ['CineColombia', scrapeCineColombia],
     ['Cinemark', scrapeCinemark],
     ['Cinépolis', scrapeCinepolis],
     ['Procinal', scrapeProcinal],
   ];
+
   for (const [name, fn] of scrapers) {
+    const isCC = name === 'CineColombia';
+    if (skipCC && isCC) { console.log(`⏭️  Saltando ${name} (SKIP_CINECOLOMBIA)`); continue; }
+    if (onlyCC && !isCC) { continue; }
     try {
       await fn();
     } catch (e) {

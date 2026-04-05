@@ -1,16 +1,13 @@
-name: Scrape Cinema Data
+name: Scrape CineColombia
 
 on:
-  schedule:
-    # Runs every 12 hours on GitHub servers (Cinemark + Cinépolis + Procinal)
-    - cron: '0 */12 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Solo manual — requiere Mac encendido
 
 jobs:
-  scrape-auto:
-    name: Cinemark + Cinépolis + Procinal (auto)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  scrape-cinecolombia:
+    name: CineColombia (self-hosted Mac)
+    runs-on: self-hosted
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -24,11 +21,12 @@ jobs:
 
       - run: npx playwright install --with-deps chromium
 
-      - name: Run Scraper (sin CineColombia)
+      - name: Run CineColombia Scraper
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-          SKIP_CINECOLOMBIA: 'true'
+          CINECOLOMBIA_JWT: ${{ secrets.CINECOLOMBIA_JWT }}
+          ONLY_CINECOLOMBIA: 'true'
         run: npx tsx scripts/scrape-all.ts
