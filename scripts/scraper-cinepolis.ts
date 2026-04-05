@@ -224,13 +224,35 @@ export async function scrapeCinepolis() {
 
         let cinemaFunctions = 0;
         const dates = c.Dates ?? c.dates ?? c.ShowDates ?? [];
-        
+        let loggedMovieKeys = false;
+
         for (const dateObj of dates) {
-          const dateStr: string = dateObj.DateQuery; // YYYYMMDD
-          if (!dateStr || dateStr.length < 8) continue;
-          
-          const formattedDate = `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`;
+          const rawDate: any = dateObj.ShowtimeDate ?? dateObj.FilterDate ?? dateObj.DateQuery;
+          if (!rawDate) continue;
+
+          let formattedDate: string;
+          const rawStr = String(rawDate);
+          if (rawStr.startsWith('/Date(')) {
+            const ms = parseInt(rawStr.replace(/\/Date\((\d+)[+-]?\d*\)\//, '$1'));
+            formattedDate = new Date(ms).toISOString().split('T')[0];
+          } else if (/^\d{8}$/.test(rawStr)) {
+            formattedDate = `${rawStr.substring(0, 4)}-${rawStr.substring(4, 6)}-${rawStr.substring(6, 8)}`;
+          } else {
+            formattedDate = rawStr.split('T')[0];
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedDate)) continue;
+          }
+
           const moviesInDate = dateObj.Movies ?? [];
+          if (!loggedMovieKeys && moviesInDate.length > 0) {
+            console.log(`         Movie keys: ${Object.keys(moviesInDate[0]).join(', ')}`);
+            const fmt0 = moviesInDate[0].Formats ?? moviesInDate[0].formats ?? [];
+            if (fmt0.length > 0) {
+              console.log(`         Format keys: ${Object.keys(fmt0[0]).join(', ')}`);
+              const st0 = fmt0[0].Showtimes ?? fmt0[0].ShowTimes ?? [];
+              if (st0.length > 0) console.log(`         Showtime keys: ${Object.keys(st0[0]).join(', ')}`);
+            }
+            loggedMovieKeys = true;
+          }
 
           for (const m of moviesInDate) {
             const title = cleanTitle(m.Title ?? m.Nombre ?? '');
