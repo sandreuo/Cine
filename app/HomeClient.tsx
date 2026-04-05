@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { supabase, Movie, City } from '@/lib/supabase';
+import { supabase, Movie, City, Cinema } from '@/lib/supabase';
 import MovieCard from '@/components/MovieCard';
 
 const CITIES_MAIN = [
@@ -54,29 +54,67 @@ export default function HomeClient({
   const [geoLoading, setGeoLoading] = useState(false);
   const [nearestCity, setNearestCity] = useState<City | null>(null);
   const [q, setQ] = useState(searchQuery);
+  const [cinemas, setCinemas] = useState<Cinema[]>([]);
+  const [cinemaFilter, setCinemaFilter] = useState<number | null>(null);
   const debounceRef = useRef<NodeJS.Timeout>();
 
-  const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string) => {
+  // Fetch cinemas for selected city
+  useEffect(() => {
+    setCinemaFilter(null);
+    if (!cityFilter) { setCinemas([]); return; }
+    supabase
+      .from('cinemas')
+      .select('id, name, chain, cities!inner(slug)')
+      .eq('cities.slug', cityFilter)
+      .order('name')
+      .then(({ data }) => { if (data) setCinemas(data as any[]); });
+  }, [cityFilter]);
+
+  const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string, dFilter: string, cinemaId: number | null) => {
     setLoading(true);
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    // Calculate date ranges
+    let startDate = today + 'T00:00:00';
+    let endDate: string | null = null;
+
+    if (dFilter === 'manana') {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(now.getDate() + 1);
+      startDate = tomorrow.toISOString().split('T')[0] + 'T00:00:00';
+      
+      const dayAfter = new Date(now);
+      dayAfter.setDate(now.getDate() + 2);
+      endDate = dayAfter.toISOString().split('T')[0] + 'T00:00:00';
+    } else if (dFilter === 'semana') {
+      const in7Days = new Date(now);
+      in7Days.setDate(now.getDate() + 7);
+      endDate = in7Days.toISOString().split('T')[0] + 'T00:00:00';
+    }
+
     try {
       // Build complex query to filter movies based on city/chain screenings
-      let query = supabase.from('movies').select('*, screenings!inner(id, cinemas!inner(chain, cities!inner(slug)))');
+      let query = supabase.from('movies').select('*, screenings!inner(id, start_time, cinemas!inner(chain, cities!inner(slug)))');
 
       if (search.trim()) {
         query = query.ilike('title', `%${search.trim()}%`);
       }
-
       if (citySlug) {
         query = query.eq('screenings.cinemas.cities.slug', citySlug);
       }
-
       if (chainFilter) {
         query = query.eq('screenings.cinemas.chain', chainFilter);
       }
+      if (cinemaId) {
+        query = query.eq('screenings.cinema_id', cinemaId);
+      }
 
-      // Ensure we only get movies with future screenings
-      query = query.gte('screenings.start_time', today + 'T00:00:00');
+      // Time range filtering
+      query = query.gte('screenings.start_time', startDate);
+      if (endDate) {
+        query = query.lt('screenings.start_time', endDate);
+      }
 
       const { data } = await query.order('title');
       if (data) {
@@ -92,9 +130,9 @@ export default function HomeClient({
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      fetchMovies(q, cityFilter, chain);
+      fetchMovies(q, cityFilter, chain, dateFilter, cinemaFilter);
     }, 350);
-  }, [q, cityFilter, chain, fetchMovies]);
+  }, [q, cityFilter, chain, dateFilter, cinemaFilter, fetchMovies]);
 
   function handleGeo() {
     if (geoActive) {
@@ -221,6 +259,27 @@ export default function HomeClient({
                 : 'Cines cerca de mí'}
             </button>
           </div>
+
+          {/* Cinema/venue chips — shown only when a city is selected and has cinemas */}
+          {cinemas.length > 0 && (
+            <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
+              <button
+                className={`filter-chip${!cinemaFilter ? ' active' : ''}`}
+                onClick={() => setCinemaFilter(null)}
+              >
+                🎭 Todos los cines
+              </button>
+              {cinemas.map((c) => (
+                <button
+                  key={c.id}
+                  className={`filter-chip${cinemaFilter === c.id ? ' active' : ''}`}
+                  onClick={() => setCinemaFilter(cinemaFilter === c.id ? null : c.id)}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
