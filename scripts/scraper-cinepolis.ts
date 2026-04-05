@@ -227,7 +227,7 @@ export async function scrapeCinepolis() {
         let loggedMovieKeys = false;
 
         for (const dateObj of dates) {
-          const rawDate: any = dateObj.ShowtimeDate ?? dateObj.FilterDate ?? dateObj.DateQuery;
+          const rawDate: any = dateObj.FilterDate ?? dateObj.DateQuery ?? dateObj.ShowtimeDate;
           if (!rawDate) continue;
 
           let formattedDate: string;
