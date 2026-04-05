@@ -62,6 +62,9 @@ const CITY_MAP: Record<string, string> = {
   pasto: 'pasto', ibague: 'ibague', neiva: 'neiva', 'santa marta': 'santa-marta',
   palmira: 'palmira', chia: 'chia', zipaquira: 'zipaquira',
   girardot: 'girardot', rionegro: 'rionegro', sincelejo: 'sincelejo',
+  barrancabermeja: 'barrancabermeja',
+  // Barrios/zonas geográficas que identifican ciudad
+  bocagrande: 'cartagena', quindio: 'armenia', sinu: 'monteria',
   // Municipios del área metropolitana → ciudad principal
   soledad: 'barranquilla',
   envigado: 'medellin', sabaneta: 'medellin', itagui: 'medellin',
@@ -69,6 +72,19 @@ const CITY_MAP: Record<string, string> = {
   floridablanca: 'bucaramanga', piedecuesta: 'bucaramanga', giron: 'bucaramanga',
   yumbo: 'cali', jamundi: 'cali',
   cota: 'bogota', soacha: 'bogota', mosquera: 'bogota', funza: 'bogota',
+};
+
+// Mapa hardcodeado para sedes de CineColombia cuyo nombre no revela la ciudad.
+// La API devuelve "BOGOTA" para todas — esto es la fuente de verdad para estos casos.
+const CINECOLOMBIA_CINEMA_CITY: Record<string, string> = {
+  'CHIPICHAPE': 'cali',
+  'COSMOCENTRO': 'cali',
+  'UNICALI': 'cali',
+  'RIO CAUCA': 'cali',
+  'CABECERA': 'bucaramanga',
+  'VENTURA TERREROS': 'barranquilla',
+  'TERRA PLAZA': 'barranquilla',
+  'PARQUE ALEGRA': 'monteria',
 };
 
 // Returns a known city slug if text matches, or '' if no match found.
@@ -378,10 +394,13 @@ export async function scrapeCineColombia() {
 
     const name: string = extractText(s.Name ?? s.name ?? s.SiteName) || `CineColombia ${siteId}`;
     const rawCity: string = extractText(s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region);
-    // CineColombia API returns "BOGOTA" for all sites — infer from name first.
-    // Priority: 1) known city from cinema name, 2) known city from API field,
-    // 3) unknown city from API (slugified as-is), 4) colombia as last resort
-    const citySlug = citySlugFromText(name) || citySlugFromText(rawCity) || (rawCity ? slugify(rawCity) : '') || 'colombia';
+    // CineColombia API returns "BOGOTA" for all sites — use hardcoded map + name inference.
+    // Priority: 1) hardcoded by name, 2) word-match from name, 3) API field, 4) colombia
+    const citySlug = CINECOLOMBIA_CINEMA_CITY[name.toUpperCase().trim()]
+      || citySlugFromText(name)
+      || citySlugFromText(rawCity)
+      || (rawCity ? slugify(rawCity) : '')
+      || 'colombia';
     const cityDisplay: string = rawCity || citySlug;
     const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
     const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
