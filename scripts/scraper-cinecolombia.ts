@@ -39,8 +39,9 @@ const ATTR_FALLBACK: Record<string, { kind: 'format' | 'language'; value: string
   '0000000008': { kind: 'language', value: 'doblada' },
 };
 
-function slugify(text: string): string {
-  return text.toLowerCase().normalize('NFD')
+function slugify(text: any): string {
+  if (!text) return '';
+  return String(text).toLowerCase().normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
@@ -412,60 +413,66 @@ export async function scrapeCineColombia() {
     if (!filmId) continue;
 
     // Upsert movie with whatever info Vista gives us
-    const rawTitle: string = vf.Title ?? vf.title ?? vf.Name ?? vf.name ?? '';
-    const title = rawTitle || `Film ${filmId}`;
-    const slug: string = vf.Slug ?? vf.slug ?? vf.UrlSlug ?? slugify(title);
-    const poster: string | null = vf.PosterUrl ?? vf.posterUrl ?? vf.GraphicUrl ?? vf.Poster ?? vf.poster ?? null;
+    try {
+      const rawTitle = String(vf.Title ?? vf.title ?? vf.Name ?? vf.name ?? '');
+      const title = rawTitle || `Film ${filmId}`;
+      const rawSlug = vf.Slug ?? vf.slug ?? vf.UrlSlug;
+      const slug = rawSlug ? String(rawSlug) : slugify(title);
+      if (!slug) continue;
 
-    const { data: dbMovie } = await supabase.from('movies').upsert({
-      slug, title, poster_url: poster,
-      is_estreno: vf.IsNowShowing === true || vf.status === 'NowShowing',
-      is_preventa: vf.IsComingSoon === true || vf.status === 'ComingSoon',
-    }, { onConflict: 'slug' }).select('id').single();
+      const poster: string | null = vf.PosterUrl ?? vf.posterUrl ?? vf.GraphicUrl ?? vf.Poster ?? vf.poster ?? null;
 
-    if (!dbMovie) continue;
+      const { data: dbMovie } = await supabase.from('movies').upsert({
+        slug, title, poster_url: poster,
+        is_estreno: vf.IsNowShowing === true || vf.status === 'NowShowing',
+        is_preventa: vf.IsComingSoon === true || vf.status === 'ComingSoon',
+      }, { onConflict: 'slug' }).select('id').single();
 
-    let filmTotal = 0;
+      if (!dbMovie) continue;
 
-    for (const dateStr of dates) {
-      const showtimes = await fetchShowtimes(jwt, filmId, allSiteIds, dateStr);
+      let filmTotal = 0;
 
-      for (const st of showtimes) {
-        const siteId = String(st.siteId ?? st.SiteId ?? '');
-        const dbSite = siteDbMap[siteId];
-        if (!dbSite) continue;
+      for (const dateStr of dates) {
+        const showtimes = await fetchShowtimes(jwt, filmId, allSiteIds, dateStr);
 
-        const startTime: string = st.schedule?.startsAt ?? st.schedule?.filmStartsAt ?? '';
-        if (!startTime) continue;
+        for (const st of showtimes) {
+          const siteId = String(st.siteId ?? st.SiteId ?? '');
+          const dbSite = siteDbMap[siteId];
+          if (!dbSite) continue;
 
-        // Decode format and language from attributeIds
-        let format = '2D';
-        let language: 'subtitulada' | 'doblada' | 'original' = 'subtitulada';
+          const startTime: string = st.schedule?.startsAt ?? st.schedule?.filmStartsAt ?? '';
+          if (!startTime) continue;
 
-        for (const attrId of (st.attributeIds ?? [])) {
-          const attr = attrMap[String(attrId)];
-          if (!attr) continue;
-          if (attr.kind === 'format') format = normalizeFormat(attr.value);
-          else if (attr.kind === 'language') language = attr.value as 'subtitulada' | 'doblada' | 'original';
+          let format = '2D';
+          let language: 'subtitulada' | 'doblada' | 'original' = 'subtitulada';
+
+          for (const attrId of (st.attributeIds ?? [])) {
+            const attr = attrMap[String(attrId)];
+            if (!attr) continue;
+            if (attr.kind === 'format') format = normalizeFormat(attr.value);
+            else if (attr.kind === 'language') language = attr.value as 'subtitulada' | 'doblada' | 'original';
+          }
+
+          const { error } = await supabase.from('screenings').upsert({
+            movie_id: (dbMovie as any).id,
+            cinema_id: dbSite.cinemaId,
+            start_time: startTime,
+            format,
+            language,
+            buy_url: st.bookingUrl ?? st.BookingUrl ?? null,
+          }, { onConflict: 'movie_id,cinema_id,start_time' });
+
+          if (!error) filmTotal++;
         }
 
-        const { error } = await supabase.from('screenings').upsert({
-          movie_id: (dbMovie as any).id,
-          cinema_id: dbSite.cinemaId,
-          start_time: startTime,
-          format,
-          language,
-          buy_url: st.bookingUrl ?? st.BookingUrl ?? null,
-        }, { onConflict: 'movie_id,cinema_id,start_time' });
-
-        if (!error) filmTotal++;
+        await new Promise(r => setTimeout(r, 150));
       }
 
-      await new Promise(r => setTimeout(r, 150));
+      if (filmTotal > 0) console.log(`   ✅ ${title}: ${filmTotal} funciones (${dates.length} días)`);
+      totalScreenings += filmTotal;
+    } catch (filmErr) {
+      console.error(`   ❌ Error procesando film ${filmId}:`, (filmErr as Error).message);
     }
-
-    if (filmTotal > 0) console.log(`   ✅ ${title}: ${filmTotal} funciones (${dates.length} días)`);
-    totalScreenings += filmTotal;
   }
 
   console.log(`\n✅ CineColombia: ${totalScreenings} funciones guardadas (${vistaFilms.length} películas, ${allSiteIds.length} sedes)`);

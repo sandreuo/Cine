@@ -23,12 +23,21 @@ async function main() {
     console.error('   ⚠️  Error en cleanup, continuando...');
   }
 
-  // 2. SCRAPE all chains
+  // 2. SCRAPE all chains — isolated so one failure doesn't kill the others
   console.log('\n📡 Fase 2: Scraping de cadenas...');
-  await scrapeCineColombia();
-  await scrapeCinemark();
-  await scrapeCinepolis();
-  await scrapeProcinal();
+  const scrapers: Array<[string, () => Promise<void>]> = [
+    ['CineColombia', scrapeCineColombia],
+    ['Cinemark', scrapeCinemark],
+    ['Cinépolis', scrapeCinepolis],
+    ['Procinal', scrapeProcinal],
+  ];
+  for (const [name, fn] of scrapers) {
+    try {
+      await fn();
+    } catch (e) {
+      console.error(`❌ ${name} falló (continuando con los demás):`, (e as Error).message);
+    }
+  }
 
   // 3. ENRICH metadata
   console.log('\n🧠 Fase 3: Enriquecimiento TMDB...');
