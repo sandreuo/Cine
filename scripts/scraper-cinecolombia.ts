@@ -82,9 +82,17 @@ const CINECOLOMBIA_CINEMA_CITY: Record<string, string> = {
   'UNICALI': 'cali',
   'RIO CAUCA': 'cali',
   'CABECERA': 'bucaramanga',
+  'CACIQUE': 'bucaramanga',
   'VENTURA TERREROS': 'barranquilla',
   'TERRA PLAZA': 'barranquilla',
   'PARQUE ALEGRA': 'monteria',
+  'MOLINOS': 'bogota',
+  'GALERIAS': 'bogota',
+  'EMBAJADOR': 'bogota',
+  'CEDRITOS': 'bogota',
+  'TITAN PLAZA': 'bogota',
+  'PORTAL 80': 'bogota',
+  'PORTAL - RECARGAS': 'bogota',
 };
 
 // Returns a known city slug if text matches, or '' if no match found.

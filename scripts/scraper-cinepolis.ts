@@ -92,13 +92,18 @@ async function getOrCreateCity(slug: string, displayName?: string): Promise<numb
 }
 
 async function getOrCreateCinema(name: string, cityId: number, lat?: number, lng?: number): Promise<number | null> {
-  const { data } = await supabase.from('cinemas').select('id, lat').eq('name', name).eq('city_id', cityId).single();
-  if (data) {
-    // Update coords if we now have them and didn't before
-    if (lat && lng && !data.lat) {
-      await supabase.from('cinemas').update({ lat, lng }).eq('id', (data as any).id);
+  const { data: rows } = await supabase.from('cinemas').select('id, lat').eq('name', name).eq('city_id', cityId).eq('chain', 'cinepolis');
+  const existing = rows ?? [];
+  if (existing.length > 0) {
+    const [canonical, ...dups] = existing as any[];
+    for (const dup of dups) {
+      await supabase.from('screenings').update({ cinema_id: canonical.id }).eq('cinema_id', dup.id);
+      await supabase.from('cinemas').delete().eq('id', dup.id);
     }
-    return (data as any).id;
+    if (lat && lng && !canonical.lat) {
+      await supabase.from('cinemas').update({ lat, lng }).eq('id', canonical.id);
+    }
+    return canonical.id;
   }
   const { data: c, error } = await supabase.from('cinemas')
     .insert({ name, city_id: cityId, chain: 'cinepolis', lat: lat ?? null, lng: lng ?? null })

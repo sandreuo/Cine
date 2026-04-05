@@ -97,8 +97,16 @@ async function getOrCreateCity(slug: string): Promise<number | null> {
 }
 
 async function getOrCreateCinema(name: string, cityId: number, address?: string): Promise<number | null> {
-  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
-  if (data) return data.id;
+  const { data: rows } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).eq('chain', 'procinal');
+  const existing = rows ?? [];
+  if (existing.length > 0) {
+    const [canonical, ...dups] = existing as any[];
+    for (const dup of dups) {
+      await supabase.from('screenings').update({ cinema_id: canonical.id }).eq('cinema_id', dup.id);
+      await supabase.from('cinemas').delete().eq('id', dup.id);
+    }
+    return canonical.id;
+  }
   const { data: c, error } = await supabase.from('cinemas')
     .insert({ name, city_id: cityId, chain: 'procinal', address: address ?? null })
     .select('id').single();
