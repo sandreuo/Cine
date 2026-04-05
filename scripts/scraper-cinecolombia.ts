@@ -39,9 +39,18 @@ const ATTR_FALLBACK: Record<string, { kind: 'format' | 'language'; value: string
   '0000000008': { kind: 'language', value: 'doblada' },
 };
 
+// Vista Cinema API returns localized text as {"text":"ANDINO","translations":[]}
+// This extracts the plain string from that format (or returns the value as-is if already a string)
+function extractText(val: any): string {
+  if (!val) return '';
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object') return String(val.text ?? val.Text ?? val.value ?? val.name ?? '');
+  return String(val);
+}
+
 function slugify(text: any): string {
   if (!text) return '';
-  return String(text).toLowerCase().normalize('NFD')
+  return extractText(text).toLowerCase().normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
@@ -331,10 +340,10 @@ export async function scrapeCineColombia() {
     const siteId = String(s.Id ?? s.id ?? s.SiteId ?? s.siteId ?? '');
     if (!siteId) continue;
 
-    const name: string = s.Name ?? s.name ?? s.SiteName ?? `CineColombia ${siteId}`;
-    const rawCity: string = s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region ?? '';
+    const name: string = extractText(s.Name ?? s.name ?? s.SiteName) || `CineColombia ${siteId}`;
+    const rawCity: string = extractText(s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region);
     const citySlug = rawCity ? citySlugFromText(rawCity) : 'bogota';
-    const cityDisplay: string = s.CityName ?? s.city ?? rawCity ?? '';
+    const cityDisplay: string = rawCity || citySlug;
     const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
     const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
     const address: string | undefined = s.Address ?? s.address ?? undefined;
@@ -414,10 +423,10 @@ export async function scrapeCineColombia() {
 
     // Upsert movie with whatever info Vista gives us
     try {
-      const rawTitle = String(vf.Title ?? vf.title ?? vf.Name ?? vf.name ?? '');
+      const rawTitle = extractText(vf.Title ?? vf.title ?? vf.Name ?? vf.name);
       const title = rawTitle || `Film ${filmId}`;
-      const rawSlug = vf.Slug ?? vf.slug ?? vf.UrlSlug;
-      const slug = rawSlug ? String(rawSlug) : slugify(title);
+      const rawSlug = extractText(vf.Slug ?? vf.slug ?? vf.UrlSlug);
+      const slug = rawSlug || slugify(title);
       if (!slug) continue;
 
       const poster: string | null = vf.PosterUrl ?? vf.posterUrl ?? vf.GraphicUrl ?? vf.Poster ?? vf.poster ?? null;
