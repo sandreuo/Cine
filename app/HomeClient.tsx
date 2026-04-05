@@ -38,14 +38,16 @@ export default function HomeClient({
   initialMovies,
   cities,
   searchQuery,
+  initialCity = '',
 }: {
   initialMovies: Movie[];
   cities: City[];
   searchQuery: string;
+  initialCity?: string;
 }) {
   const [movies, setMovies] = useState<Movie[]>(initialMovies);
   const [loading, setLoading] = useState(false);
-  const [cityFilter, setCityFilter] = useState('');
+  const [cityFilter, setCityFilter] = useState(initialCity);
   const [chain, setChain] = useState('');
   const [dateFilter, setDateFilter] = useState('hoy');
   const [geoActive, setGeoActive] = useState(false);
@@ -56,17 +58,32 @@ export default function HomeClient({
 
   const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string) => {
     setLoading(true);
+    const today = new Date().toISOString().split('T')[0];
     try {
-      // In production, filter by screenings for the given city/date
-      // For now, fetch all movies with optional search
-      let query = supabase.from('movies').select('*').order('title');
+      // Build complex query to filter movies based on city/chain screenings
+      let query = supabase.from('movies').select('*, screenings!inner(id, cinemas!inner(chain, cities!inner(slug)))');
 
       if (search.trim()) {
         query = query.ilike('title', `%${search.trim()}%`);
       }
 
-      const { data } = await query;
-      if (data) setMovies(data);
+      if (citySlug) {
+        query = query.eq('screenings.cinemas.cities.slug', citySlug);
+      }
+
+      if (chainFilter) {
+        query = query.eq('screenings.cinemas.chain', chainFilter);
+      }
+
+      // Ensure we only get movies with future screenings
+      query = query.gte('screenings.start_time', today + 'T00:00:00');
+
+      const { data } = await query.order('title');
+      if (data) {
+        // Deduplicate movies from inner join
+        const unique = Array.from(new Map((data as any[]).map(m => [m.id, m])).values()) as Movie[];
+        setMovies(unique);
+      }
     } finally {
       setLoading(false);
     }

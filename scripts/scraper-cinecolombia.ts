@@ -81,26 +81,62 @@ async function getOrCreateCinema(name: string, cityId: number): Promise<number |
 
 // Try to fetch Next.js build ID from the page HTML using Playwright to bypass basic Cloudflare
 async function getNextBuildId(): Promise<string | null> {
-  console.log('   🔍 Obteniendo Build ID via Playwright...');
-  const browser = await chromium.launch({ headless: true });
+  console.log('   🔍 Obteniendo Build ID via Playwright (Modo Sigilo)...');
+  const browser = await chromium.launch({ 
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--window-size=1280,720'
+    ]
+  });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    viewport: { width: 1280, height: 720 },
+    locale: 'es-CO',
+    timezoneId: 'America/Bogota',
   });
+  
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    // @ts-ignore
+    window.chrome = { runtime: {} };
+    // @ts-ignore
+    navigator.languages = ['es-CO', 'es'];
+  });
+
   const page = await context.newPage();
   
   try {
-    // Go to a simple page that likely has the build ID
-    await page.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(2000);
+    // Random wait to seem more human
+    await page.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'networkidle', timeout: 60000 });
+    
+    // Simulate some human interaction
+    await page.mouse.move(Math.random() * 500, Math.random() * 500);
+    await page.evaluate(() => window.scrollTo(0, 300));
+    await page.waitForTimeout(3000 + Math.random() * 2000);
     
     const buildId = await page.evaluate(() => {
       try {
-        return JSON.parse(document.getElementById('__NEXT_DATA__')?.textContent || '{}').buildId;
-      } catch {
+        const nextData = document.getElementById('__NEXT_DATA__');
+        if (nextData) return JSON.parse(nextData.textContent || '{}').buildId;
+        // Fallback: search in script tags
+        const scripts = Array.from(document.querySelectorAll('script'));
+        for (const s of scripts) {
+          const match = s.textContent?.match(/"buildId":"([^"]+)"/);
+          if (match) return match[1];
+        }
         return null;
-      }
+      } catch { return null; }
     });
     
+    if (buildId) console.log(`      ✅ Build ID encontrado: ${buildId}`);
+    else {
+      const title = await page.title();
+      console.error(`      ⚠️  Build ID no encontrado. Título de página: "${title}"`);
+    }
+
     await browser.close();
     return buildId || null;
   } catch (err) {

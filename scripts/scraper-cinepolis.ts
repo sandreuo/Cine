@@ -210,41 +210,45 @@ export async function scrapeCinepolis() {
 
       const json = await res.json();
       const cinemas: any[] = json?.d?.Cinemas ?? [];
+      console.log(`      Found ${cinemas.length} cinemas`);
 
       for (const c of cinemas) {
         const cinemaId = await getOrCreateCinema(c.Name, cityId, parseFloat(c.Lat), parseFloat(c.Lng));
         if (!cinemaId) continue;
 
-        let cityFunctions = 0;
-        for (const dateObj of c.Dates ?? []) {
-          const rawDate = dateObj.ShowtimeDate; // e.g. "20260405" or similar?
-          // The API date usually comes as "05 abril", we need to be careful.
-          // Let's check the date format in a real response.
-          const dateStr = dateObj.DateQuery; // This is usually YYYYMMDD
-          const year = dateStr.substring(0, 4);
-          const month = dateStr.substring(4, 6);
-          const day = dateStr.substring(6, 8);
-          const formattedDate = `${year}-${month}-${day}`;
+        let cinemaFunctions = 0;
+        const dates = c.Dates ?? [];
+        
+        for (const dateObj of dates) {
+          const dateStr: string = dateObj.DateQuery; // YYYYMMDD
+          if (!dateStr || dateStr.length < 8) continue;
+          
+          const formattedDate = `${dateStr.substring(0, 4)}-${dateStr.substring(4, 6)}-${dateStr.substring(6, 8)}`;
+          const moviesInDate = dateObj.Movies ?? [];
 
-          for (const m of dateObj.Movies ?? []) {
+          for (const m of moviesInDate) {
             const title = cleanTitle(m.Title ?? m.Nombre ?? '');
             if (!isValidMovieTitle(title)) continue;
 
-            const movieSlug = m.Slug ?? slugify(title);
+            const movieSlug = m.Slug ?? m.Key ?? slugify(title);
             const { data: dbMovie } = await supabase.from('movies').upsert({
               slug: movieSlug, title,
               poster_url: m.Poster || m.Image || null,
               rating: m.Rating || null,
-              duration_minutes: parseInt(m.Duration) || null,
-              genres: m.Genre ? [m.Genre] : [],
-              description: m.Synopsis || null,
+              duration_minutes: parseInt(m.RunTime ?? m.Duration ?? '0') || null,
+              genres: m.Gender ? [m.Gender] : (m.Genre ? [m.Genre] : []),
+              description: m.Synopsis || m.Sinopsis || null,
             }, { onConflict: 'slug' }).select('id').single();
 
             if (!dbMovie) continue;
 
-            for (const format of m.Formats ?? []) {
-              for (const showtime of format.Showtimes ?? []) {
+            const formats = m.Formats ?? [];
+            for (const format of formats) {
+              const showtimes = format.Showtimes ?? format.ShowTimes ?? [];
+              for (const showtime of showtimes) {
                 const time = showtime.Time; // "21:30"
+                if (!time) continue;
+                
                 const startTime = `${formattedDate}T${time}:00`;
 
                 await supabase.from('screenings').upsert({
@@ -253,14 +257,14 @@ export async function scrapeCinepolis() {
                   start_time: startTime,
                   format: normalizeFormat(format.Name),
                   language: normalizeLanguage(format.Language),
-                  buy_url: null, // Cinépolis uses a complex booking flow
+                  buy_url: null,
                 }, { onConflict: 'movie_id,cinema_id,start_time' });
-                cityFunctions++;
+                cinemaFunctions++;
               }
             }
           }
         }
-        if (cityFunctions > 0) console.log(`      ✅ ${c.Name}: ${cityFunctions} funciones`);
+        if (cinemaFunctions > 0) console.log(`      ✅ ${c.Name}: ${cinemaFunctions} funciones`);
       }
     } catch (err) {
       console.error(`      ❌ Error en ${citySlug}:`, (err as Error).message);

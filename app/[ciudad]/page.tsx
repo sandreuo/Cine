@@ -52,17 +52,25 @@ export default async function CityPage({
     );
   }
 
+  const today = new Date().toISOString().split('T')[0];
+
   const [{ data: movies }, { data: cities }] = await Promise.all([
-    supabase.from('movies').select('*').order('title'),
+    supabase.from('movies')
+      .select('*, screenings!inner(id, cinemas!inner(cities!inner(slug)))')
+      .eq('screenings.cinemas.cities.slug', params.ciudad)
+      .gte('screenings.start_time', today + 'T00:00:00')
+      .order('title'),
     supabase.from('cities').select('*').order('name'),
   ]);
+
+  // Handle duplication from !inner join
+  const uniqueMovies = Array.from(new Map((movies || []).map(m => [m.id, m])).values());
 
   return (
     <>
       <Header />
       <main>
         {/* We use HomeClient but pre-select the city locally */}
-        {/* Realistically, pre-filtering on the server is better but we use HomeClient for interactivity */}
         <section className="hero" style={{ padding: '32px 0 24px' }}>
           <div className="container">
              <span className="hero-eyebrow">
@@ -76,15 +84,10 @@ export default async function CityPage({
         
         {/* We use HomeClient which displays the movies interactively */}
         <HomeClient
-          initialMovies={movies || []}
+          initialMovies={uniqueMovies || []}
           cities={cities || []}
           searchQuery={searchParams.q || ''}
-        />
-
-        <HomeClient
-          initialMovies={movies || []}
-          cities={cities || []}
-          searchQuery={searchParams.q || ''}
+          initialCity={params.ciudad}
         />
       </main>
       <Footer />
