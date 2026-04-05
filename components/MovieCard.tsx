@@ -19,13 +19,20 @@ export default function MovieCard({ movie }: { movie: Movie }) {
               src={movie.poster_url}
               alt={`Póster de ${movie.title}`}
               fill
+              unoptimized
               sizes="(max-width: 480px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 20vw"
               style={{ objectFit: 'cover' }}
             />
           ) : (
             <div className="movie-poster-placeholder">🎞</div>
           )}
-          {movie.release_date && (new Date().getTime() - new Date(movie.release_date).getTime() < 30 * 24 * 60 * 60 * 1000) && (new Date(movie.release_date) <= new Date()) && (
+          {movie.is_preventa && (
+            <span className="movie-presale-badge">PREVENTA</span>
+          )}
+          {movie.is_estreno && (
+            <span className="movie-new-badge">ESTRENO</span>
+          )}
+          {!movie.is_estreno && movie.release_date && (new Date().getTime() - new Date(movie.release_date).getTime() < 30 * 24 * 60 * 60 * 1000) && (new Date(movie.release_date) <= new Date()) && (
             <span className="movie-new-badge">ESTRENO</span>
           )}
           {movie.rating && (

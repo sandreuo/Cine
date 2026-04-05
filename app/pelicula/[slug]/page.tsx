@@ -92,7 +92,7 @@ export default async function MoviePage({ params }: { params: { slug: string } }
             <div className="movie-hero-inner">
               <div className="movie-detail-poster">
                 {movie.poster_url ? (
-                  <Image src={movie.poster_url} alt={movie.title} width={400} height={600} style={{ width: '100%', height: 'auto' }} />
+                  <Image src={movie.poster_url} alt={movie.title} width={400} height={600} unoptimized style={{ width: '100%', height: 'auto' }} />
                 ) : (
                   <div className="movie-poster-placeholder">🎞</div>
                 )}
