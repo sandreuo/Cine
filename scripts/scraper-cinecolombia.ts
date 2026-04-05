@@ -372,7 +372,7 @@ export async function scrapeCineColombia() {
     const rawCity: string = extractText(s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region);
     // Priority: 1) known city from API field, 2) known city from cinema name,
     // 3) unknown city from API (slugified as-is), 4) bogota as last resort
-    const citySlug = citySlugFromText(rawCity) || citySlugFromText(name) || (rawCity ? slugify(rawCity) : '') || 'bogota';
+    const citySlug = citySlugFromText(rawCity) || citySlugFromText(name) || (rawCity ? slugify(rawCity) : '') || 'colombia';
     const cityDisplay: string = rawCity || citySlug;
     const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
     const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
