@@ -17,6 +17,8 @@ export type Movie = {
   genres: string[] | null;
   release_date: string | null;
   tmdb_id: number | null;
+  is_estreno?: boolean | null;
+  is_preventa?: boolean | null;
 };
 
 export type Cinema = {
