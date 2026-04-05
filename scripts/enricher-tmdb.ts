@@ -49,6 +49,12 @@ async function searchTMDB(query: string, region?: string): Promise<any | null> {
   return search.results?.[0] ?? null;
 }
 
+// Spanish → English title mappings for known problematic cases
+const TITLE_OVERRIDES: Record<string, string> = {
+  'cabra': 'goat',
+  'la cabra': 'the goat',
+};
+
 // Multiple search strategies to maximize TMDB hit rate
 async function findOnTMDB(title: string, slug: string): Promise<any | null> {
   // Build candidate queries in priority order
@@ -67,6 +73,13 @@ async function findOnTMDB(title: string, slug: string): Promise<any | null> {
   // Strip subtitle after colon (broad match)
   const noSubtitle = title.replace(/\s*:.*$/, '').trim();
   if (noSubtitle && noSubtitle !== title && noSubtitle.length >= 3) candidates.push(noSubtitle);
+
+  // Known overrides (Spanish abbreviations → English full title)
+  const override = TITLE_OVERRIDES[title.toLowerCase().trim()];
+  if (override) candidates.push(override);
+
+  // Also try uppercase acronym as-is (e.g. "GOAT", "F1")
+  if (/^[A-Z0-9.]{2,6}$/.test(title.trim())) candidates.push(title.trim());
 
   // Deduplicate
   const unique = Array.from(new Set(candidates));
@@ -116,27 +129,33 @@ async function enrichMovie(id: number, title: string, slug: string): Promise<num
   const isUpcoming = release_date && release_date > today;
 
   const videos: any[] = details.videos?.results ?? [];
-  // Trailer priority: Spanish Latin (es-419 or es), then any language, then any YouTube
+  // Trailer priority: Spanish Latin (es-419), then Spanish, then any Trailer, then any Teaser, then any YouTube
   const trailer =
     videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es' && v.iso_3166_1 === '419') ??
     videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube' && v.iso_639_1 === 'es') ??
     videos.find((v: any) => v.type === 'Trailer' && v.site === 'YouTube') ??
+    videos.find((v: any) => v.type === 'Teaser' && v.site === 'YouTube' && v.iso_639_1 === 'es') ??
+    videos.find((v: any) => v.type === 'Teaser' && v.site === 'YouTube') ??
     videos.find((v: any) => v.site === 'YouTube');
   const trailerId: string | null = trailer?.key ?? null;
 
   // Use TMDB's canonical title in Spanish (details.title is in the requested language es-419)
   const tmdbTitle: string = details.title ?? title;
 
-  const { error } = await supabase.from('movies').update({
+  // Build update object — only overwrite poster/trailer/description if TMDB actually has them
+  // (avoids nuking the scraper's data when TMDB is missing assets)
+  const updateData: Record<string, any> = {
     tmdb_id: tmdbId,
     title: tmdbTitle,
-    poster_url: poster,
-    description,
-    duration_minutes: duration,
-    genres,
-    trailer_youtube_id: trailerId,
     release_date,
-  }).eq('id', id);
+  };
+  if (poster) updateData.poster_url = poster;
+  if (description) updateData.description = description;
+  if (duration) updateData.duration_minutes = duration;
+  if (genres.length > 0) updateData.genres = genres;
+  if (trailerId) updateData.trailer_youtube_id = trailerId;
+
+  const { error } = await supabase.from('movies').update(updateData).eq('id', id);
 
   if (error) {
     console.error(`   ❌ Error actualizando ${title}:`, error.message);
@@ -144,8 +163,8 @@ async function enrichMovie(id: number, title: string, slug: string): Promise<num
   }
 
   const flags = [
-    poster ? '🖼️ poster' : '✗poster',
-    trailerId ? '🎬 trailer' : '✗trailer',
+    poster ? '🖼️ poster' : '✗poster(kept scraper)',
+    trailerId ? '🎬 trailer' : '✗trailer(kept scraper)',
     isUpcoming ? `📅 estreno ${release_date}` : '',
   ].filter(Boolean).join(' · ');
 
@@ -259,7 +278,7 @@ export async function enrichWithTMDB() {
 
   const { data: movies, error } = await supabase
     .from('movies')
-    .select('id, title, slug, tmdb_id, release_date');
+    .select('id, title, slug, tmdb_id, release_date, poster_url, trailer_youtube_id');
 
   if (error || !movies) {
     console.error('❌ Error leyendo películas:', error?.message);
@@ -269,8 +288,9 @@ export async function enrichWithTMDB() {
   console.log(`   ${movies.length} películas en base de datos`);
 
   for (const movie of movies) {
-    // Skip if already fully enriched (has tmdb_id + release_date)
-    if ((movie as any).tmdb_id && (movie as any).release_date) {
+    const m = movie as any;
+    // Skip only if fully enriched: tmdb_id + release_date + poster + trailer
+    if (m.tmdb_id && m.release_date && m.poster_url && m.trailer_youtube_id) {
       console.log(`   ⏭️  ${movie.title} — ya enriquecida`);
       continue;
     }

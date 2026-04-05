@@ -1,8 +1,20 @@
 /**
- * CineColombia scraper
- * Strategy: Next.js /_next/data/ API calls bypass Cloudflare entirely.
- * We first fetch the HTML minimally to get the build ID, then call JSON endpoints directly.
- * Fallback: Playwright if build ID fetch fails.
+ * CineColombia scraper — Vista Cinema API (digital-api.cinecolombia.com/ocapi/v1)
+ *
+ * JWT auth strategy (12h token issued by auth.moviexchange.com):
+ *   1. Check CINECOLOMBIA_JWT env var — use it if still valid
+ *   2. Playwright: load /films/ → click first film → intercept digital-api call → grab JWT
+ *      (works on local machine or self-hosted GitHub Actions runner)
+ *
+ * Once we have the JWT, ALL data comes from digital-api.cinecolombia.com directly:
+ *   GET /ocapi/v1/sites         → all cinemas with name, city, coords
+ *   GET /ocapi/v1/attributes    → attribute ID → format/language map
+ *   GET /ocapi/v1/films/now-playing → all films in cartelera
+ *   GET /ocapi/v1/showtimes/by-business-date/{date}?filmIds=&siteIds= → showtimes
+ *
+ * For GitHub Actions (non-self-hosted):
+ *   Set CINECOLOMBIA_JWT secret. When it expires (~12h) the run is skipped gracefully.
+ *   Recommended: use a self-hosted runner on your Mac for automatic JWT refresh.
  */
 import { chromium } from 'playwright';
 import { supabaseAdmin as supabase } from '../lib/supabase-admin';
@@ -11,14 +23,20 @@ import path from 'path';
 
 dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 
-const today = new Date().toISOString().split('T')[0];
-const BASE = 'https://www.cinecolombia.com';
+const DIGITAL_API = 'https://digital-api.cinecolombia.com/ocapi/v1';
+const CC_BASE = 'https://www.cinecolombia.com';
+const CHAIN = 'cinecolombia';
+const DAYS_AHEAD = 4; // today + 3 more days
 
-const CITIES = ['bogota', 'medellin', 'cali', 'barranquilla', 'bucaramanga', 'cartagena'];
-
-const CITY_NAMES: Record<string, string> = {
-  bogota: 'Bogotá', medellin: 'Medellín', cali: 'Cali',
-  barranquilla: 'Barranquilla', bucaramanga: 'Bucaramanga', cartagena: 'Cartagena',
+// Fallback attribute map derived from observed data.
+// Overridden by live /attributes response at runtime.
+const ATTR_FALLBACK: Record<string, { kind: 'format' | 'language'; value: string }> = {
+  '0000000001': { kind: 'format', value: '3D' },
+  '0000000002': { kind: 'format', value: 'IMAX' },
+  '0000000003': { kind: 'format', value: '4DX' },
+  '0000000004': { kind: 'format', value: '2D' },
+  '0000000007': { kind: 'language', value: 'subtitulada' },
+  '0000000008': { kind: 'language', value: 'doblada' },
 };
 
 function slugify(text: string): string {
@@ -26,263 +44,89 @@ function slugify(text: string): string {
     .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
-function cleanTitle(raw: string): string {
-  return raw.replace(/[\s\n\r]+/g, ' ')
-    .replace(/\s*\(?\s*(DOB|SUB|DUBBED|SUBTITULAD[AO])\s*(2D|3D|IMAX|4DX|XD)?\s*\)?\s*$/i, '')
-    .replace(/\s*\(?\s*(2D|3D|IMAX|4DX|XD)\s*\)?\s*$/i, '').trim();
-}
-
-const GARBAGE_PATTERNS = [
-  /^(top[\s-]+)?banner/i, /^horario[\s-]+apertura/i, /\bmembership\b/i,
-  /\bactivated\b/i, /\bworld[\s-]+tour\b/i, /\blive[\s-]+viewing\b/i,
-  /arirang/i, /^bts\b/i, /^standar(d)?$/i, /^cine[\s-]club/i,
-  /^todas las pel/i,
-];
-
-function isValidMovieTitle(title: string): boolean {
-  if (!title || title.trim().length < 2) return false;
-  return !GARBAGE_PATTERNS.some(p => p.test(title.trim()));
+function citySlugFromText(text: string): string {
+  const n = (text ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  const MAP: Record<string, string> = {
+    bogota: 'bogota', medellin: 'medellin', cali: 'cali',
+    barranquilla: 'barranquilla', bucaramanga: 'bucaramanga', cartagena: 'cartagena',
+    manizales: 'manizales', pereira: 'pereira', cucuta: 'cucuta',
+    villavicencio: 'villavicencio', monteria: 'monteria', armenia: 'armenia',
+    pasto: 'pasto', ibague: 'ibague', neiva: 'neiva', 'santa marta': 'santa-marta',
+    palmira: 'palmira', soledad: 'soledad', chia: 'chia', zipaquira: 'zipaquira',
+    girardot: 'girardot', rionegro: 'rionegro', sincelejo: 'sincelejo',
+  };
+  return MAP[n] ?? slugify(n) ?? 'bogota';
 }
 
 function normalizeFormat(raw: string): string {
   const f = (raw ?? '').toUpperCase();
   if (f.includes('IMAX')) return 'IMAX';
-  if (f.includes('4DX')) return '4DX';
+  if (f.includes('4DX') || f.includes('FOUR')) return '4DX';
   if (f.includes('XD')) return 'XD';
-  if (f.includes('PREMIUM')) return 'PREMIUM';
+  if (f.includes('PREMIUM') || f.includes('VIP') || f.includes('ELITE')) return 'PREMIUM';
   if (f.includes('3D')) return '3D';
   return '2D';
 }
 
-function normalizeLanguage(raw: string): 'subtitulada' | 'doblada' | 'original' {
-  const l = (raw ?? '').toLowerCase();
-  if (l.includes('dob') || l.includes('dub')) return 'doblada';
-  if (l.includes('orig')) return 'original';
-  return 'subtitulada';
-}
-
-async function getOrCreateCity(slug: string): Promise<number | null> {
-  const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
-  if (data) return data.id;
-  const name = CITY_NAMES[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
-  const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
-  if (error) { console.error(`Error ciudad ${slug}:`, error.message); return null; }
-  return c?.id ?? null;
-}
-
-async function getOrCreateCinema(name: string, cityId: number): Promise<number | null> {
-  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
-  if (data) return data.id;
-  const { data: c, error } = await supabase.from('cinemas')
-    .insert({ name, city_id: cityId, chain: 'cinecolombia' }).select('id').single();
-  if (error) { console.error(`Error cine ${name}:`, error.message); return null; }
-  return c?.id ?? null;
-}
-
-// Try to fetch Next.js build ID from the page HTML using Playwright to bypass basic Cloudflare
-async function getNextBuildId(): Promise<string | null> {
-  console.log('   🔍 Obteniendo Build ID via Playwright (Modo Sigilo)...');
-  const browser = await chromium.launch({ 
-    headless: true,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--window-size=1280,720'
-    ]
-  });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    viewport: { width: 1280, height: 720 },
-    locale: 'es-CO',
-    timezoneId: 'America/Bogota',
-  });
-  
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    // @ts-ignore
-    window.chrome = { runtime: {} };
-    // @ts-ignore
-    navigator.languages = ['es-CO', 'es'];
-  });
-
-  const page = await context.newPage();
-  
+function isJWTExpired(jwt: string): boolean {
   try {
-    // Random wait to seem more human
-    await page.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'networkidle', timeout: 60000 });
-    
-    // Simulate some human interaction
-    await page.mouse.move(Math.random() * 500, Math.random() * 500);
-    await page.evaluate(() => window.scrollTo(0, 300));
-    await page.waitForTimeout(3000 + Math.random() * 2000);
-    
-    const buildId = await page.evaluate(() => {
-      try {
-        const nextData = document.getElementById('__NEXT_DATA__');
-        if (nextData) return JSON.parse(nextData.textContent || '{}').buildId;
-        // Fallback: search in script tags
-        const scripts = Array.from(document.querySelectorAll('script'));
-        for (const s of scripts) {
-          const match = s.textContent?.match(/"buildId":"([^"]+)"/);
-          if (match) return match[1];
-        }
-        return null;
-      } catch { return null; }
-    });
-    
-    if (buildId) console.log(`      ✅ Build ID encontrado: ${buildId}`);
-    else {
-      const title = await page.title();
-      console.error(`      ⚠️  Build ID no encontrado. Título de página: "${title}"`);
-    }
-
-    await browser.close();
-    return buildId || null;
-  } catch (err) {
-    console.error('      ❌ Error obteniendo buildId:', (err as Error).message);
-    await browser.close();
-    return null;
-  }
-}
-
-// Fetch Next.js JSON data endpoint directly
-async function fetchNextData(buildId: string, pagePath: string): Promise<any | null> {
-  const url = `${BASE}/_next/data/${buildId}${pagePath}.json`;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'es-CO,es;q=0.9',
-        'x-nextjs-data': '1',
-      },
-    });
-    if (!res.ok) return null;
-    return await res.json();
+    const payload = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64').toString());
+    const exp: number = payload.exp ?? 0;
+    // Consider expired if less than 30 min remaining
+    return Date.now() / 1000 > exp - 1800;
   } catch {
-    return null;
+    return true;
   }
 }
 
-async function processShowings(showings: any[], movieId: number, defaultCitySlug: string) {
-  for (const showing of showings) {
-    const cinemaName: string = showing.cinema?.name ?? showing.cinema?.nombre ??
-      showing.theater?.name ?? showing.nombre ?? showing.name ?? '';
-    if (!cinemaName) continue;
-
-    const rawCity: string = showing.cinema?.city?.slug ?? showing.cinema?.ciudad?.slug ??
-      showing.ciudad ?? showing.city ?? '';
-    const citySlug = rawCity
-      ? CITIES.find(c => rawCity.toLowerCase().includes(c)) ?? defaultCitySlug
-      : defaultCitySlug;
-
-    const cityId = await getOrCreateCity(citySlug);
-    if (!cityId) continue;
-    const cinemaId = await getOrCreateCinema(cinemaName, cityId);
-    if (!cinemaId) continue;
-
-    const schedules: any[] = showing.schedules ?? showing.horarios ??
-      showing.funciones ?? (showing.time ?? showing.hora ? [showing] : []);
-
-    for (const sched of schedules) {
-      const rawTime: string = sched.time ?? sched.hora ?? sched.start_time ?? '';
-      if (!rawTime) continue;
-      const startTime = /^\d{1,2}:\d{2}$/.test(rawTime)
-        ? `${today}T${rawTime.padStart(5, '0')}:00` : rawTime;
-
-      await supabase.from('screenings').upsert({
-        movie_id: movieId, cinema_id: cinemaId, start_time: startTime,
-        format: normalizeFormat(sched.format ?? sched.tipo ?? sched.sala ?? '2D'),
-        language: normalizeLanguage(sched.language ?? sched.idioma ?? 'subtitulada'),
-        buy_url: sched.buy_url ?? null,
-      }, { onConflict: 'movie_id,cinema_id,start_time' });
-    }
+function businessDates(): string[] {
+  const dates: string[] = [];
+  for (let i = 0; i < DAYS_AHEAD; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    // Format as YYYYMMDD (Vista Cinema date format)
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    dates.push(`${yyyy}${mm}${dd}`);
   }
+  return dates;
 }
 
-export async function scrapeCineColombia() {
-  console.log('🎬 Iniciando scraper de CINE COLOMBIA...');
+// ── DB helpers ────────────────────────────────────────────────────────────────
 
-  // ── STRATEGY 1: Next.js data API (bypasses Cloudflare) ───────────────────
-  const buildId = await getNextBuildId();
-  if (buildId) {
-    console.log(`   Build ID: ${buildId}`);
-    let apiSuccess = false;
+async function getOrCreateCity(slug: string, displayName?: string): Promise<number | null> {
+  const { data } = await supabase.from('cities').select('id').eq('slug', slug).single();
+  if (data) return (data as any).id;
+  const name = displayName ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+  const { data: c, error } = await supabase.from('cities').insert({ slug, name }).select('id').single();
+  if (error) { console.error('Error ciudad:', error.message); return null; }
+  return (c as any)?.id ?? null;
+}
 
-    for (const city of CITIES) {
-      console.log(`   📍 ${city}`);
-      const data = await fetchNextData(buildId, `/${city}/cartelera`);
-      if (!data) {
-        console.log(`      ⚠️  Sin datos JSON`);
-        continue;
-      }
+async function getOrCreateCinema(
+  name: string, cityId: number, lat?: number, lng?: number, address?: string
+): Promise<number | null> {
+  const { data } = await supabase.from('cinemas').select('id').eq('name', name).eq('city_id', cityId).single();
+  if (data) return (data as any).id;
+  const { data: c, error } = await supabase.from('cinemas').insert({
+    name, city_id: cityId, chain: CHAIN,
+    lat: lat ?? null, lng: lng ?? null,
+    address: address ?? null,
+  }).select('id').single();
+  if (error) { console.error('Error cine:', error.message); return null; }
+  return (c as any)?.id ?? null;
+}
 
-      const pp = data?.pageProps ?? {};
-      console.log(`      pageProps keys: ${Object.keys(pp).join(', ')}`);
+// ── Phase 1: Acquire JWT ──────────────────────────────────────────────────────
 
-      const rawMovies: any[] = pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.content?.movies ?? [];
-      console.log(`      ${rawMovies.length} películas`);
-
-      for (const m of rawMovies) {
-        const title = cleanTitle(m.title ?? m.titulo ?? '');
-        if (!isValidMovieTitle(title)) continue;
-
-        const movieSlug = m.slug ?? m.url_slug ?? slugify(title);
-        const { data: movie } = await supabase.from('movies').upsert({
-          slug: movieSlug, title,
-          poster_url: m.poster_url ?? m.poster ?? m.image ?? null,
-          description: m.synopsis ?? m.sinopsis ?? m.description ?? null,
-          duration_minutes: parseInt(String(m.duration ?? m.duracion ?? '0')) || null,
-          rating: m.rating ?? m.clasificacion ?? null,
-          genres: (m.genres ?? m.generos ?? []).map((g: any) => g?.name ?? g?.nombre ?? g ?? ''),
-        }, { onConflict: 'slug' }).select('id').single();
-
-        if (!movie) continue;
-        apiSuccess = true;
-
-        // Try to get per-movie showings from the movie detail JSON endpoint
-        const code = m.code ?? m.id ?? m.film_id ?? m.HO ?? '';
-        if (m.slug && code) {
-          const movieData = await fetchNextData(buildId, `/films/${m.slug}/${code}/`);
-          const mpp = movieData?.pageProps ?? {};
-          const showings: any[] = mpp.showings ?? mpp.screenings ?? mpp.functions ?? [];
-          if (showings.length > 0) {
-            await processShowings(showings, movie.id, city);
-            console.log(`      🎥 ${title}: ${showings.length} sedes`);
-          }
-        }
-
-        // Also process showings embedded in cartelera item
-        const embeddedShowings: any[] = m.showings ?? m.screenings ?? m.funciones ?? [];
-        if (embeddedShowings.length > 0) {
-          await processShowings(embeddedShowings, movie.id, city);
-        }
-      }
-    }
-
-    if (apiSuccess) {
-      console.log('✅ Cine Colombia Scraper finalizado (vía Next.js API).');
-      return;
-    }
-    console.log('   ⚠️  API sin datos útiles, usando Playwright...');
-  } else {
-    console.log('   ⚠️  No se obtuvo buildId, usando Playwright...');
-  }
-
-  // ── STRATEGY 2: Playwright with all captured APIs ─────────────────────────
+async function acquireJWTViaPlaywright(): Promise<string> {
   const browser = await chromium.launch({
     headless: true,
-    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-setuid-sandbox'],
+    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
   });
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    extraHTTPHeaders: {
-      'Accept-Language': 'es-CO,es;q=0.9',
-      'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"',
-    },
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     locale: 'es-CO',
     timezoneId: 'America/Bogota',
   });
@@ -290,161 +134,339 @@ export async function scrapeCineColombia() {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
 
+  let jwt = '';
+  const page = await context.newPage();
+
+  // Intercept ALL requests — grab JWT from any digital-api call
+  await page.route('**/*', async (route, request) => {
+    if (request.url().includes('digital-api.cinecolombia.com')) {
+      const auth = request.headers()['authorization'] ?? '';
+      if (auth.startsWith('Bearer ') && !jwt) {
+        jwt = auth.replace('Bearer ', '');
+        console.log('   🔑 JWT interceptado de digital-api');
+      }
+    }
+    await route.continue();
+  });
+
   try {
-    // Load Bogotá cartelera and capture ALL API calls
-    const allApiData: { url: string; body: any }[] = [];
-    const cartelaPage = await context.newPage();
+    // Step 1: Load films listing to find a film to click
+    console.log('   🌐 Cargando /films/...');
+    await page.goto(`${CC_BASE}/films/`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForTimeout(3000);
 
-    await cartelaPage.route('**/*', async (route, request) => {
-      const response = await route.fetch();
-      const ct = response.headers()['content-type'] ?? '';
-      if (ct.includes('application/json')) {
-        try { allApiData.push({ url: request.url(), body: await response.json() }); } catch { /* ignore */ }
+    // Step 2: If no JWT yet, click the first film card to trigger the showtimes request
+    if (!jwt) {
+      const filmLink = await page.$('a[href*="/films/"][href*="/HO"]');
+      if (filmLink) {
+        const href = await filmLink.getAttribute('href');
+        console.log(`   🎯 Navegando a película: ${href}`);
+        await page.goto(`${CC_BASE}${href}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(4000);
       }
-      await route.fulfill({ response });
-    });
-
-    try {
-      await cartelaPage.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'networkidle', timeout: 60000 });
-    } catch {
-      await cartelaPage.goto(`${BASE}/bogota/cartelera`, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    }
-    await cartelaPage.waitForTimeout(5000);
-
-    const title = await cartelaPage.title();
-    console.log(`   Título: "${title}"`);
-
-    if (title.toLowerCase().includes('just a moment') || title.toLowerCase().includes('cloudflare') || title.toLowerCase().includes('un momento')) {
-      console.log('   ⚠️  Cloudflare activo. Logeando APIs capturadas antes del bloqueo:');
-      for (const { url, body } of allApiData) {
-        console.log(`      📡 ${url.substring(0, 100)}`);
-      }
-      await cartelaPage.close();
-      await browser.close();
-      console.log('✅ Cine Colombia Scraper finalizado (bloqueado por Cloudflare).');
-      return;
     }
 
-    // Log all captured APIs for structure discovery
-    console.log(`   ${allApiData.length} APIs capturadas:`);
-    for (const { url, body } of allApiData) {
-      console.log(`   📡 ${url.substring(0, 100)}`);
-      console.log(`      ${JSON.stringify(body).substring(0, 200)}`);
-    }
-
-    // Extract movie refs from __NEXT_DATA__ or DOM
-    const movieRefs: { slug: string; code: string; title: string }[] = await cartelaPage.evaluate(() => {
-      const refs: { slug: string; code: string; title: string }[] = [];
-
-      const nd = document.getElementById('__NEXT_DATA__');
-      if (nd) {
-        try {
-          const data = JSON.parse(nd.textContent ?? '{}');
-          const pp = data?.props?.pageProps ?? {};
-          const movies: any[] = pp.movies ?? pp.billboard?.movies ?? pp.data?.movies ?? pp.content?.movies ?? [];
-          movies.forEach((m: any) => {
-            const slug = m.slug ?? m.url_slug ?? '';
-            const code = String(m.code ?? m.id ?? m.film_id ?? m.HO ?? '');
-            const t = m.title ?? m.titulo ?? '';
-            if (slug || code) refs.push({ slug, code, title: t });
-          });
-          if (refs.length > 0) return refs;
-        } catch { /* ignore */ }
-      }
-
-      document.querySelectorAll('a[href*="/films/"]').forEach((a) => {
-        const href = (a as HTMLAnchorElement).href;
-        const match = href.match(/\/films\/([^/]+)\/([^/]+)\//);
-        if (match && !refs.find(r => r.code === match[2])) {
-          const t = a.querySelector('h2,h3,h4,[class*="title"]')?.textContent?.trim() ?? match[1];
-          refs.push({ slug: match[1], code: match[2], title: t });
-        }
+    // Step 3: If still no JWT, try the known working URL
+    if (!jwt) {
+      console.log('   🎯 Intentando URL fija de Project Hail Mary...');
+      await page.goto(`${CC_BASE}/films/project-hail-mary/HO00000456/`, {
+        waitUntil: 'domcontentloaded', timeout: 30000,
       });
-
-      return refs;
-    });
-
-    const cleanedRefs = movieRefs
-      .map(r => ({ ...r, title: cleanTitle(r.title) }))
-      .filter(r => isValidMovieTitle(r.title));
-
-    console.log(`   ${cleanedRefs.length} películas válidas`);
-    await cartelaPage.close();
-
-    for (const ref of cleanedRefs) {
-      const { slug, code, title: refTitle } = ref;
-      const movieSlug = slug || slugify(refTitle);
-
-      const { data: movie } = await supabase.from('movies').upsert(
-        { slug: movieSlug, title: refTitle }, { onConflict: 'slug' }
-      ).select('id').single();
-      if (!movie) continue;
-
-      const movieUrl = code
-        ? `${BASE}/films/${slug}/${code}/`
-        : `${BASE}/bogota/pelicula/${slug}`;
-
-      const moviePage = await context.newPage();
-      const movieApiData: { url: string; body: any }[] = [];
-
-      await moviePage.route('**/*', async (route, request) => {
-        const response = await route.fetch();
-        const ct = response.headers()['content-type'] ?? '';
-        if (ct.includes('application/json')) {
-          try { movieApiData.push({ url: request.url(), body: await response.json() }); } catch { /* ignore */ }
-        }
-        await route.fulfill({ response });
-      });
-
-      console.log(`   🎥 ${refTitle}`);
-      try {
-        await moviePage.goto(movieUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-        await moviePage.waitForTimeout(4000);
-
-        const movieNd = await moviePage.evaluate(() => document.getElementById('__NEXT_DATA__')?.textContent ?? null);
-        if (movieNd) {
-          const nd = JSON.parse(movieNd);
-          const pp = nd?.props?.pageProps ?? {};
-          const m = pp.movie ?? pp.film ?? pp.data ?? {};
-
-          if (m.title || m.poster_url || m.synopsis) {
-            await supabase.from('movies').update({
-              title: cleanTitle(m.title ?? m.titulo ?? refTitle),
-              poster_url: m.poster_url ?? m.poster ?? m.image ?? null,
-              description: m.synopsis ?? m.sinopsis ?? m.description ?? null,
-              duration_minutes: parseInt(String(m.duration ?? m.duracion ?? '0')) || null,
-              rating: m.rating ?? m.clasificacion ?? null,
-              genres: (m.genres ?? m.generos ?? []).map((g: any) => g?.name ?? g ?? ''),
-            }).eq('id', movie.id);
-          }
-
-          const showings: any[] = pp.showings ?? pp.screenings ?? pp.functions ?? pp.showtimes ??
-            m.showings ?? m.screenings ?? [];
-          if (showings.length > 0) {
-            await processShowings(showings, movie.id, 'bogota');
-            console.log(`      ✅ ${showings.length} sedes`);
-          }
-        }
-
-        // Log movie page APIs for debugging
-        for (const { url, body: apiBody } of movieApiData) {
-          console.log(`      📡 ${url.substring(0, 100)}`);
-          console.log(`         ${JSON.stringify(apiBody).substring(0, 200)}`);
-        }
-
-      } catch (err) {
-        console.error(`      ❌ ${refTitle}:`, (err as Error).message);
-      } finally {
-        await moviePage.unroute('**/*');
-        await moviePage.close();
-      }
-      await new Promise(r => setTimeout(r, 1000));
+      await page.waitForTimeout(4000);
     }
-
   } catch (err) {
-    console.error('❌ Error fatal:', err);
+    console.error('   ❌ Playwright error:', (err as Error).message);
   } finally {
     await browser.close();
-    console.log('\n✅ Cine Colombia Scraper finalizado.');
   }
+
+  if (!jwt) {
+    throw new Error(
+      'No se pudo obtener JWT. Opciones:\n' +
+      '  1. Corre el scraper localmente (Mac)\n' +
+      '  2. Usa un self-hosted GitHub Actions runner en tu Mac\n' +
+      '  3. Exporta CINECOLOMBIA_JWT manualmente desde Chrome DevTools'
+    );
+  }
+  return jwt;
+}
+
+async function acquireJWT(): Promise<string> {
+  const envJwt = process.env.CINECOLOMBIA_JWT ?? '';
+  if (envJwt && !isJWTExpired(envJwt)) {
+    console.log('   🔑 Usando JWT de variable de entorno (válido)');
+    return envJwt;
+  }
+  if (envJwt) console.log('   ⚠️  JWT de env expirado, obteniendo nuevo via Playwright...');
+  return acquireJWTViaPlaywright();
+}
+
+// ── Phase 2: API calls with JWT ───────────────────────────────────────────────
+
+function apiHeaders(jwt: string): Record<string, string> {
+  return {
+    'Authorization': `Bearer ${jwt}`,
+    'Accept': 'application/json',
+    'Accept-Language': 'es-CO,es;q=0.9',
+    'Origin': CC_BASE,
+    'Referer': `${CC_BASE}/`,
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+  };
+}
+
+async function fetchSites(jwt: string): Promise<any[]> {
+  try {
+    const res = await fetch(`${DIGITAL_API}/sites`, { headers: apiHeaders(jwt) });
+    if (!res.ok) { console.warn(`   ⚠️  /sites → ${res.status}`); return []; }
+    const data = await res.json();
+    const sites = Array.isArray(data) ? data : (data?.sites ?? data?.Sites ?? []);
+    console.log(`   📍 ${sites.length} sedes en /sites`);
+    return sites;
+  } catch (err) {
+    console.error('   ❌ Error /sites:', (err as Error).message);
+    return [];
+  }
+}
+
+async function fetchAttributes(jwt: string): Promise<Record<string, { kind: 'format' | 'language'; value: string }>> {
+  try {
+    const res = await fetch(`${DIGITAL_API}/attributes`, { headers: apiHeaders(jwt) });
+    if (!res.ok) return ATTR_FALLBACK;
+    const data = await res.json();
+    const attrs: any[] = Array.isArray(data) ? data : (data?.attributes ?? data?.Attributes ?? []);
+
+    const map: Record<string, { kind: 'format' | 'language'; value: string }> = { ...ATTR_FALLBACK };
+    for (const a of attrs) {
+      const id = String(a.Id ?? a.id ?? a.AttributeId ?? '');
+      const desc = (a.Description ?? a.description ?? a.ShortName ?? a.Name ?? a.name ?? '').toUpperCase();
+      if (!id || !desc) continue;
+      if (desc.includes('IMAX')) map[id] = { kind: 'format', value: 'IMAX' };
+      else if (desc.includes('4DX') || desc.includes('4D')) map[id] = { kind: 'format', value: '4DX' };
+      else if (desc.includes('XD') || desc.includes('XTREME')) map[id] = { kind: 'format', value: 'XD' };
+      else if (desc.includes('3D')) map[id] = { kind: 'format', value: '3D' };
+      else if (desc.includes('2D')) map[id] = { kind: 'format', value: '2D' };
+      else if (desc.includes('SUB') || desc.includes('SUBT') || desc.includes('SUBTITULAD')) map[id] = { kind: 'language', value: 'subtitulada' };
+      else if (desc.includes('DOB') || desc.includes('DUB') || desc.includes('DOBLAD')) map[id] = { kind: 'language', value: 'doblada' };
+    }
+    console.log(`   🎭 ${Object.keys(map).length} atributos cargados`);
+    return map;
+  } catch {
+    return ATTR_FALLBACK;
+  }
+}
+
+async function fetchNowPlaying(jwt: string): Promise<any[]> {
+  // Try multiple Vista Cinema endpoint variants
+  const endpoints = [
+    `${DIGITAL_API}/films/now-playing`,
+    `${DIGITAL_API}/films?status=NowShowing`,
+    `${DIGITAL_API}/films/now-showing`,
+    `${DIGITAL_API}/films`,
+  ];
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { headers: apiHeaders(jwt) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const films: any[] = Array.isArray(data) ? data : (data?.films ?? data?.Films ?? data?.nowShowing ?? []);
+      if (films.length > 0) {
+        console.log(`   🎬 ${films.length} películas en ${url.replace(DIGITAL_API, '')}`);
+        return films;
+      }
+    } catch { /* try next */ }
+  }
+  return [];
+}
+
+async function fetchShowtimes(jwt: string, filmId: string, allSiteIds: string[], dateStr: string): Promise<any[]> {
+  // dateStr = YYYYMMDD
+  // Try specific date first, then 'first' (= today)
+  const endpoints = [
+    `${DIGITAL_API}/showtimes/by-business-date/${dateStr}`,
+    dateStr === businessDates()[0] ? `${DIGITAL_API}/showtimes/by-business-date/first` : null,
+  ].filter(Boolean) as string[];
+
+  for (const base of endpoints) {
+    try {
+      const params = new URLSearchParams();
+      params.append('filmIds', filmId);
+      // Pass all site IDs (Vista API filters internally — returns only matching ones)
+      for (const id of allSiteIds) params.append('siteIds', id);
+      const url = `${base}?${params}`;
+      const res = await fetch(url, { headers: apiHeaders(jwt) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const list: any[] = data?.showtimes ?? data?.Showtimes ?? [];
+      if (list.length >= 0) return list; // even empty is valid
+    } catch { /* try next */ }
+  }
+  return [];
+}
+
+// ── Main export ────────────────────────────────────────────────────────────────
+
+export async function scrapeCineColombia() {
+  console.log('🎬 Iniciando scraper CineColombia (Vista Cinema API)...');
+
+  // ── Phase 1: JWT ─────────────────────────────────────────────────────────
+  let jwt: string;
+  try {
+    jwt = await acquireJWT();
+  } catch (err) {
+    console.error('❌ JWT no disponible:', (err as Error).message);
+    console.error('   💡 Solución rápida: exporta CINECOLOMBIA_JWT desde Chrome DevTools');
+    return;
+  }
+
+  // ── Phase 2: Sites → build cinema/city map ────────────────────────────────
+  console.log('\n📍 Cargando sedes...');
+  const rawSites = await fetchSites(jwt);
+
+  // siteId → { dbCinemaId, dbCityId }
+  const siteDbMap: Record<string, { cinemaId: number; cityId: number }> = {};
+  const cityCache: Record<string, number> = {};
+
+  for (const s of rawSites) {
+    const siteId = String(s.Id ?? s.id ?? s.SiteId ?? s.siteId ?? '');
+    if (!siteId) continue;
+
+    const name: string = s.Name ?? s.name ?? s.SiteName ?? `CineColombia ${siteId}`;
+    const rawCity: string = s.City ?? s.city ?? s.CityName ?? s.Region ?? s.region ?? '';
+    const citySlug = rawCity ? citySlugFromText(rawCity) : 'bogota';
+    const cityDisplay: string = s.CityName ?? s.city ?? rawCity ?? '';
+    const lat: number | undefined = parseFloat(s.Latitude ?? s.latitude ?? s.Lat ?? '') || undefined;
+    const lng: number | undefined = parseFloat(s.Longitude ?? s.longitude ?? s.Lng ?? '') || undefined;
+    const address: string | undefined = s.Address ?? s.address ?? undefined;
+
+    let cityId = cityCache[citySlug];
+    if (!cityId) {
+      cityId = await getOrCreateCity(citySlug, cityDisplay) ?? 0;
+      if (cityId) cityCache[citySlug] = cityId;
+    }
+    if (!cityId) continue;
+
+    const cinemaId = await getOrCreateCinema(name, cityId, lat, lng, address);
+    if (cinemaId) siteDbMap[siteId] = { cinemaId, cityId };
+  }
+
+  // If /sites returned nothing, fall back to Bogotá siteIds from the known showtimes URL
+  if (rawSites.length === 0) {
+    console.log('   ⚠️  /sites vacío — usando siteIds conocidos de Bogotá como fallback');
+    const BOGOTA_SITE_IDS = [
+      '6871','6461','6760','6493','6541','6669','6501','6791',
+      '6451','6754','6736','6674','6431','6536','7249','6427',
+      '6630','6750','6659','7131','6183',
+    ];
+    const bogotaId = await getOrCreateCity('bogota', 'Bogotá') ?? 0;
+    if (bogotaId) {
+      cityCache['bogota'] = bogotaId;
+      for (const id of BOGOTA_SITE_IDS) {
+        const cinemaId = await getOrCreateCinema(`CineColombia ${id}`, bogotaId);
+        if (cinemaId) siteDbMap[id] = { cinemaId, cityId: bogotaId };
+      }
+    }
+  }
+
+  const allSiteIds = Object.keys(siteDbMap);
+  console.log(`   ✅ ${allSiteIds.length} sedes mapeadas en DB`);
+
+  // ── Phase 3: Attribute map ────────────────────────────────────────────────
+  const attrMap = await fetchAttributes(jwt);
+
+  // ── Phase 4: Films in cartelera ───────────────────────────────────────────
+  console.log('\n🎬 Cargando películas...');
+  let vistaFilms = await fetchNowPlaying(jwt);
+
+  if (vistaFilms.length === 0) {
+    console.warn('   ⚠️  No se encontraron películas via API — intentando via Playwright __NEXT_DATA__...');
+    // Fallback: scrape __NEXT_DATA__ from films page (requires Playwright again)
+    const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    const ctx = await browser.newContext({ locale: 'es-CO' });
+    const pg = await ctx.newPage();
+    try {
+      await pg.goto(`${CC_BASE}/films/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await pg.waitForTimeout(2000);
+      const ndStr = await pg.evaluate(() => document.getElementById('__NEXT_DATA__')?.textContent ?? null);
+      if (ndStr) {
+        const nd = JSON.parse(ndStr);
+        const pp = nd?.props?.pageProps ?? {};
+        vistaFilms = pp.films ?? pp.movies ?? pp.billboard ?? pp.Films ?? [];
+        console.log(`   🎬 ${vistaFilms.length} películas en __NEXT_DATA__`);
+      }
+    } catch { /* ignore */ }
+    await browser.close();
+  }
+
+  if (vistaFilms.length === 0) {
+    console.error('❌ Sin películas — abortando');
+    return;
+  }
+
+  // ── Phase 5: Showtimes per film per date ──────────────────────────────────
+  console.log('\n🕐 Cargando horarios...');
+  let totalScreenings = 0;
+  const dates = businessDates();
+
+  for (const vf of vistaFilms) {
+    const filmId: string = String(vf.Id ?? vf.id ?? vf.FilmId ?? vf.ExternalCode ?? vf.externalCode ?? '');
+    if (!filmId) continue;
+
+    // Upsert movie with whatever info Vista gives us
+    const rawTitle: string = vf.Title ?? vf.title ?? vf.Name ?? vf.name ?? '';
+    const title = rawTitle || `Film ${filmId}`;
+    const slug: string = vf.Slug ?? vf.slug ?? vf.UrlSlug ?? slugify(title);
+    const poster: string | null = vf.PosterUrl ?? vf.posterUrl ?? vf.GraphicUrl ?? vf.Poster ?? vf.poster ?? null;
+
+    const { data: dbMovie } = await supabase.from('movies').upsert({
+      slug, title, poster_url: poster,
+      is_estreno: vf.IsNowShowing === true || vf.status === 'NowShowing',
+      is_preventa: vf.IsComingSoon === true || vf.status === 'ComingSoon',
+    }, { onConflict: 'slug' }).select('id').single();
+
+    if (!dbMovie) continue;
+
+    let filmTotal = 0;
+
+    for (const dateStr of dates) {
+      const showtimes = await fetchShowtimes(jwt, filmId, allSiteIds, dateStr);
+
+      for (const st of showtimes) {
+        const siteId = String(st.siteId ?? st.SiteId ?? '');
+        const dbSite = siteDbMap[siteId];
+        if (!dbSite) continue;
+
+        const startTime: string = st.schedule?.startsAt ?? st.schedule?.filmStartsAt ?? '';
+        if (!startTime) continue;
+
+        // Decode format and language from attributeIds
+        let format = '2D';
+        let language: 'subtitulada' | 'doblada' | 'original' = 'subtitulada';
+
+        for (const attrId of (st.attributeIds ?? [])) {
+          const attr = attrMap[String(attrId)];
+          if (!attr) continue;
+          if (attr.kind === 'format') format = normalizeFormat(attr.value);
+          else if (attr.kind === 'language') language = attr.value as 'subtitulada' | 'doblada' | 'original';
+        }
+
+        const { error } = await supabase.from('screenings').upsert({
+          movie_id: (dbMovie as any).id,
+          cinema_id: dbSite.cinemaId,
+          start_time: startTime,
+          format,
+          language,
+          buy_url: st.bookingUrl ?? st.BookingUrl ?? null,
+        }, { onConflict: 'movie_id,cinema_id,start_time' });
+
+        if (!error) filmTotal++;
+      }
+
+      await new Promise(r => setTimeout(r, 150));
+    }
+
+    if (filmTotal > 0) console.log(`   ✅ ${title}: ${filmTotal} funciones (${dates.length} días)`);
+    totalScreenings += filmTotal;
+  }
+
+  console.log(`\n✅ CineColombia: ${totalScreenings} funciones guardadas (${vistaFilms.length} películas, ${allSiteIds.length} sedes)`);
 }

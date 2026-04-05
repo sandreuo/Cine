@@ -8,7 +8,8 @@ on:
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    # Runs on your Mac via self-hosted runner (bypasses Cloudflare block on GH datacenter IPs)
+    runs-on: self-hosted
     timeout-minutes: 30  # 4 chains × ~6 cities × Playwright needs time
 
     steps:
@@ -30,8 +31,9 @@ jobs:
       - name: Run Scraper
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          # Service role key bypasses RLS — required for INSERT/UPDATE on protected tables
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          # CineColombia Vista Cinema JWT (12h expiry — auto-refreshed on self-hosted Mac runner via Playwright)
+          CINECOLOMBIA_JWT: ${{ secrets.CINECOLOMBIA_JWT }}
         run: npx tsx scripts/scrape-all.ts
