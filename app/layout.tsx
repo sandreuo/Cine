@@ -37,6 +37,7 @@ export const metadata: Metadata = {
     description: 'Toda la cartelera de cine colombiana en un solo lugar.',
   },
   robots: { index: true, follow: true },
+  other: { 'google-adsense-account': 'ca-pub-3504512443308706' },
 };
 
 export default function RootLayout({
@@ -46,17 +47,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es-CO">
-      <head>
+      <body>
+        {children}
+        <Analytics />
         <Script
           async
           src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3504512443308706"
           crossOrigin="anonymous"
-          strategy="beforeInteractive"
+          strategy="afterInteractive"
         />
-      </head>
-      <body>
-        {children}
-        <Analytics />
       </body>
     </html>
   );
