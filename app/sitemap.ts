@@ -1,9 +1,9 @@
 import { MetadataRoute } from 'next';
 import { supabase } from '@/lib/supabase';
 
-export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const baseUrl = 'https://cinehoy.co';
+const BASE_URL = 'https://cinehoyap.app';
 
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const { data: movies } = await supabase
     .from('movies')
     .select('slug, updated_at')
@@ -14,26 +14,23 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     .select('slug');
 
   const movieUrls: MetadataRoute.Sitemap = (movies || []).map((m) => ({
-    url: `${baseUrl}/pelicula/${m.slug}`,
+    url: `${BASE_URL}/pelicula/${m.slug}`,
     lastModified: m.updated_at || new Date(),
     changeFrequency: 'daily',
     priority: 0.9,
   }));
 
   const cityUrls: MetadataRoute.Sitemap = (cities || []).map((c) => ({
-    url: `${baseUrl}/${c.slug}`,
+    url: `${BASE_URL}/${c.slug}`,
     lastModified: new Date(),
     changeFrequency: 'hourly',
     priority: 0.8,
   }));
 
   return [
-    {
-      url: baseUrl,
-      lastModified: new Date(),
-      changeFrequency: 'hourly',
-      priority: 1,
-    },
+    { url: BASE_URL, lastModified: new Date(), changeFrequency: 'hourly', priority: 1 },
+    { url: `${BASE_URL}/nosotros`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.4 },
+    { url: `${BASE_URL}/privacidad`, lastModified: new Date(), changeFrequency: 'monthly', priority: 0.3 },
     ...cityUrls,
     ...movieUrls,
   ];

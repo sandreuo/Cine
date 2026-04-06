@@ -9,6 +9,6 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ['/api/'],
       },
     ],
-    sitemap: 'https://cinehoy.co/sitemap.xml',
+    sitemap: 'https://cinehoyap.app/sitemap.xml',
   };
 }

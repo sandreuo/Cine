@@ -8,10 +8,19 @@ import SEOContent from '@/components/SEOContent';
 export const revalidate = 3600; // Revalidate every hour
 
 export const metadata: Metadata = {
-  title: 'CineHoy.co — Cartelera de Cine en Colombia Hoy',
+  title: 'Cartelera de Cine en Colombia Hoy — CineHoy',
   description:
-    'Consulta la cartelera de cine en Colombia: Cinépolis, Cine Colombia, Cinemark y Procinal. Horarios, trailers, cines cercanos y comparte con tus amigos por WhatsApp.',
-  alternates: { canonical: 'https://cinehoy.co' },
+    'Cartelera de cine en Colombia hoy: consulta horarios de Cinépolis, Cine Colombia, Cinemark y Procinal en Bogotá, Medellín, Cali, Barranquilla y más. Actualizado cada hora.',
+  alternates: { canonical: 'https://cinehoyap.app' },
+  keywords: [
+    'cartelera de cine Colombia hoy',
+    'qué hay en cine hoy Colombia',
+    'horarios cine Colombia',
+    'películas en cartelera Colombia',
+    'cine hoy Bogotá',
+    'cine hoy Medellín',
+    'funciones de cine hoy',
+  ],
 };
 
 export default async function HomePage({
