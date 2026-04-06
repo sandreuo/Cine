@@ -46,15 +46,17 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es-CO">
-      <body>
-        {children}
-        <Analytics />
+      <head>
         <Script
           async
           src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3504512443308706"
           crossOrigin="anonymous"
-          strategy="afterInteractive"
+          strategy="beforeInteractive"
         />
+      </head>
+      <body>
+        {children}
+        <Analytics />
       </body>
     </html>
   );
