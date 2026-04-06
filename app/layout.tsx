@@ -46,7 +46,10 @@ export const metadata: Metadata = {
     images: [`${BASE_URL}/og-image.png`],
   },
   robots: { index: true, follow: true, googleBot: { index: true, follow: true, 'max-image-preview': 'large' } },
-  other: { 'google-adsense-account': 'ca-pub-3504512443308706' },
+  other: {
+    'google-adsense-account': 'ca-pub-3504512443308706',
+    'google-site-verification': 'CoPj5ReKooV8cTGUsM2g88GeBUEwb4k8NANC06Mti1Q',
+  },
 };
 
 const websiteSchema = {
