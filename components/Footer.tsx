@@ -56,6 +56,12 @@ export default function Footer() {
             ))}
           </div>
 
+          <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
+            <Link href="/nosotros" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Sobre CineHoy</Link>
+            <Link href="/privacidad" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Política de privacidad</Link>
+            <a href="mailto:sandreuo@gmail.com" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Contacto</a>
+          </div>
+
           <p className="footer-disclaimer">
             CineHoy.co es un servicio independiente de información sobre cartelera cinematográfica en Colombia.
             No estamos afiliados con ninguna cadena de cines. Los horarios son actualizados automáticamente y
