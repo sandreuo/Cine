@@ -173,15 +173,17 @@ export async function scrapeCinemark() {
     const page = await context.newPage();
 
     await page.route('**/*', async (route, request) => {
-      const response = await route.fetch();
-      const ct = response.headers()['content-type'] ?? '';
-      if (ct.includes('application/json')) {
-        try {
-          const body = await response.json();
-          capturedApiData.push({ url: request.url(), body });
-        } catch { /* ignore */ }
-      }
-      await route.fulfill({ response });
+      try {
+        const response = await route.fetch();
+        const ct = response.headers()['content-type'] ?? '';
+        if (ct.includes('application/json')) {
+          try {
+            const body = await response.json();
+            capturedApiData.push({ url: request.url(), body });
+          } catch { /* ignore */ }
+        }
+        await route.fulfill({ response });
+      } catch { /* route already handled by Playwright internally, ignore */ }
     });
 
     try {
