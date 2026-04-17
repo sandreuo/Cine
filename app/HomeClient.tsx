@@ -54,6 +54,7 @@ export default function HomeClient({
   const [geoLoading, setGeoLoading] = useState(false);
   const [nearestCity, setNearestCity] = useState<City | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number; lng: number} | null>(null);
+  const [radius, setRadius] = useState(5);
   const [q, setQ] = useState(searchQuery);
   const [cinemas, setCinemas] = useState<Cinema[]>([]);
   const [cinemaFilter, setCinemaFilter] = useState<number | null>(null);
@@ -87,7 +88,7 @@ export default function HomeClient({
     }, 350);
   }, [q]);
 
-  const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string, dFilter: string, cinemaId: number | null) => {
+  const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string, dFilter: string, cinemaId: number | null, nearbyCinemaIds?: number[]) => {
     setLoading(true);
     const now = new Date();
     const today = now.toISOString().split('T')[0];
@@ -125,6 +126,8 @@ export default function HomeClient({
       }
       if (cinemaId) {
         query = query.eq('screenings.cinema_id', cinemaId);
+      } else if (nearbyCinemaIds && nearbyCinemaIds.length > 0) {
+        query = query.in('screenings.cinema_id', nearbyCinemaIds);
       }
 
       // Time range filtering
@@ -147,9 +150,10 @@ export default function HomeClient({
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      fetchMovies(q, cityFilter, chain, dateFilter, cinemaFilter);
+      fetchMovies(q, cityFilter, chain, dateFilter, cinemaFilter, nearbyCinemaIds);
     }, 350);
-  }, [q, cityFilter, chain, dateFilter, cinemaFilter, fetchMovies]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, cityFilter, chain, dateFilter, cinemaFilter, geoActive, radius, cinemas, fetchMovies]);
 
   function handleGeo() {
     if (geoActive) {
@@ -196,6 +200,16 @@ export default function HomeClient({
         return da - db;
       })
     : cinemas;
+
+  // Cinemas within selected radius (only relevant when geo is active)
+  const nearbyCinemas = geoActive && userLocation
+    ? sortedCinemas.filter(c => {
+        if (!c.lat || !c.lng) return false;
+        return getDistance(userLocation.lat, userLocation.lng, c.lat, c.lng) <= radius;
+      })
+    : sortedCinemas;
+
+  const nearbyCinemaIds = geoActive && !cinemaFilter ? nearbyCinemas.map(c => c.id) : undefined;
 
   const displayMovies = movies.filter((m) => {
     if (q.trim() && !m.title.toLowerCase().includes(q.toLowerCase())) return false;
@@ -295,6 +309,27 @@ export default function HomeClient({
             </button>
           </div>
 
+          {/* Radius slider — shown only when geo is active */}
+          {geoActive && (
+            <div className="radius-slider-row">
+              <span className="radius-label">📍 Radio</span>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="1"
+                value={radius}
+                onChange={(e) => { setRadius(Number(e.target.value)); setCinemaFilter(null); }}
+                className="radius-slider"
+                aria-label="Radio de búsqueda en km"
+              />
+              <span className="radius-value">{radius} km</span>
+              <span className="radius-count">
+                {nearbyCinemas.length} cine{nearbyCinemas.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          )}
+
           {/* Cinema search suggestions — shown when search matches cinema names */}
           {cinemaSearchResults.length > 0 && (
             <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -322,16 +357,16 @@ export default function HomeClient({
             </div>
           )}
 
-          {/* Cinema/venue chips — shown only when a city is selected and has cinemas */}
-          {sortedCinemas.length > 0 && (
+          {/* Cinema/venue chips */}
+          {nearbyCinemas.length > 0 && (
             <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
               <button
                 className={`filter-chip${!cinemaFilter ? ' active' : ''}`}
                 onClick={() => setCinemaFilter(null)}
               >
-                🎭 Todos los cines
+                🎭 Todos{geoActive ? ` (${nearbyCinemas.length})` : ''}
               </button>
-              {sortedCinemas.map((c) => {
+              {nearbyCinemas.map((c) => {
                 const dist = userLocation && c.lat && c.lng
                   ? getDistance(userLocation.lat, userLocation.lng, c.lat, c.lng)
                   : null;
@@ -344,13 +379,18 @@ export default function HomeClient({
                     {c.name}
                     {dist !== null && (
                       <span style={{ marginLeft: '4px', opacity: 0.6, fontSize: '0.75em' }}>
-                        · {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}
+                        {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}
                       </span>
                     )}
                   </button>
                 );
               })}
             </div>
+          )}
+          {geoActive && nearbyCinemas.length === 0 && (
+            <p style={{ marginTop: '8px', fontSize: '0.82rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+              Sin cines en {radius} km — sube el radio
+            </p>
           )}
         </div>
       </section>
