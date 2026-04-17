@@ -68,7 +68,7 @@ export default function HomeClient({
     if (!cityFilter) { setCinemas([]); return; }
     supabase
       .from('cinemas')
-      .select('id, name, chain, cities!inner(slug, name)')
+      .select('id, name, chain, lat, lng, cities!inner(slug, name)')
       .eq('cities.slug', cityFilter)
       .order('name')
       .then(({ data }) => { if (data) setCinemas(data as any[]); });
