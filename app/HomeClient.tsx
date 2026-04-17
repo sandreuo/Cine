@@ -53,6 +53,7 @@ export default function HomeClient({
   const [geoActive, setGeoActive] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
   const [nearestCity, setNearestCity] = useState<City | null>(null);
+  const [userLocation, setUserLocation] = useState<{lat: number; lng: number} | null>(null);
   const [q, setQ] = useState(searchQuery);
   const [cinemas, setCinemas] = useState<Cinema[]>([]);
   const [cinemaFilter, setCinemaFilter] = useState<number | null>(null);
@@ -154,6 +155,7 @@ export default function HomeClient({
     if (geoActive) {
       setGeoActive(false);
       setNearestCity(null);
+      setUserLocation(null);
       setCityFilter('');
       return;
     }
@@ -162,6 +164,7 @@ export default function HomeClient({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
+        setUserLocation({ lat: latitude, lng: longitude });
         // Find nearest city
         let nearest: City | null = null;
         let minDist = Infinity;
@@ -184,6 +187,15 @@ export default function HomeClient({
       () => setGeoLoading(false)
     );
   }
+
+  // Sort cinemas by distance when user location is known
+  const sortedCinemas = userLocation
+    ? [...cinemas].sort((a, b) => {
+        const da = a.lat && a.lng ? getDistance(userLocation.lat, userLocation.lng, a.lat, a.lng) : Infinity;
+        const db = b.lat && b.lng ? getDistance(userLocation.lat, userLocation.lng, b.lat, b.lng) : Infinity;
+        return da - db;
+      })
+    : cinemas;
 
   const displayMovies = movies.filter((m) => {
     if (q.trim() && !m.title.toLowerCase().includes(q.toLowerCase())) return false;
@@ -311,7 +323,7 @@ export default function HomeClient({
           )}
 
           {/* Cinema/venue chips — shown only when a city is selected and has cinemas */}
-          {cinemas.length > 0 && (
+          {sortedCinemas.length > 0 && (
             <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
               <button
                 className={`filter-chip${!cinemaFilter ? ' active' : ''}`}
@@ -319,15 +331,25 @@ export default function HomeClient({
               >
                 🎭 Todos los cines
               </button>
-              {cinemas.map((c) => (
-                <button
-                  key={c.id}
-                  className={`filter-chip${cinemaFilter === c.id ? ' active' : ''}`}
-                  onClick={() => setCinemaFilter(cinemaFilter === c.id ? null : c.id)}
-                >
-                  {c.name}
-                </button>
-              ))}
+              {sortedCinemas.map((c) => {
+                const dist = userLocation && c.lat && c.lng
+                  ? getDistance(userLocation.lat, userLocation.lng, c.lat, c.lng)
+                  : null;
+                return (
+                  <button
+                    key={c.id}
+                    className={`filter-chip${cinemaFilter === c.id ? ' active' : ''}`}
+                    onClick={() => setCinemaFilter(cinemaFilter === c.id ? null : c.id)}
+                  >
+                    {c.name}
+                    {dist !== null && (
+                      <span style={{ marginLeft: '4px', opacity: 0.6, fontSize: '0.75em' }}>
+                        · {dist < 1 ? `${Math.round(dist * 1000)}m` : `${dist.toFixed(1)}km`}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

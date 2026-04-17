@@ -124,6 +124,8 @@ const CINECOLOMBIA_CINEMA_CITY: Record<string, string> = {
   'BULEVAR': 'bogota',
   'MULTIPLAZA': 'bogota',
   'DIVER PLAZA': 'bogota',
+  'LA ESTACIÓN': 'ibague',
+  'LA ESTACION': 'ibague',
 };
 
 // Returns a known city slug if text matches, or '' if no match found.
