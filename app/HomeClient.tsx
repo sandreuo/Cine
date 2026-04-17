@@ -56,7 +56,9 @@ export default function HomeClient({
   const [q, setQ] = useState(searchQuery);
   const [cinemas, setCinemas] = useState<Cinema[]>([]);
   const [cinemaFilter, setCinemaFilter] = useState<number | null>(null);
+  const [cinemaSearchResults, setCinemaSearchResults] = useState<Cinema[]>([]);
   const debounceRef = useRef<NodeJS.Timeout>();
+  const cinemaSearchRef = useRef<NodeJS.Timeout>();
 
   // Fetch cinemas for selected city
   useEffect(() => {
@@ -64,11 +66,25 @@ export default function HomeClient({
     if (!cityFilter) { setCinemas([]); return; }
     supabase
       .from('cinemas')
-      .select('id, name, chain, cities!inner(slug)')
+      .select('id, name, chain, cities!inner(slug, name)')
       .eq('cities.slug', cityFilter)
       .order('name')
       .then(({ data }) => { if (data) setCinemas(data as any[]); });
   }, [cityFilter]);
+
+  // Search cinemas by name when user types
+  useEffect(() => {
+    clearTimeout(cinemaSearchRef.current);
+    if (!q.trim() || q.trim().length < 2) { setCinemaSearchResults([]); return; }
+    cinemaSearchRef.current = setTimeout(() => {
+      supabase
+        .from('cinemas')
+        .select('id, name, chain, cities!inner(slug, name)')
+        .ilike('name', `%${q.trim()}%`)
+        .limit(5)
+        .then(({ data }) => { setCinemaSearchResults(data ? data as any[] : []); });
+    }, 350);
+  }, [q]);
 
   const fetchMovies = useCallback(async (search: string, citySlug: string, chainFilter: string, dFilter: string, cinemaId: number | null) => {
     setLoading(true);
@@ -183,7 +199,14 @@ export default function HomeClient({
             🇨🇴 Colombia · {new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}
           </span>
           <h1>
-            Toda la cartelera,<br />
+            Toda la{' '}
+            <a
+              href="#cartelera"
+              style={{ color: 'inherit', textDecoration: 'none', borderBottom: '3px solid var(--gold)', cursor: 'pointer' }}
+            >
+              cartelera
+            </a>
+            ,<br />
             <span>en un solo lugar</span>
           </h1>
           <p className="hero-desc">
@@ -260,6 +283,33 @@ export default function HomeClient({
             </button>
           </div>
 
+          {/* Cinema search suggestions — shown when search matches cinema names */}
+          {cinemaSearchResults.length > 0 && (
+            <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginRight: '4px' }}>Sedes:</span>
+              {cinemaSearchResults.map((c) => (
+                <button
+                  key={c.id}
+                  className={`filter-chip${cinemaFilter === c.id ? ' active' : ''}`}
+                  onClick={() => {
+                    const city = (c as any).cities;
+                    if (city?.slug) { setCityFilter(city.slug); setGeoActive(false); setNearestCity(null); }
+                    setCinemaFilter(cinemaFilter === c.id ? null : c.id);
+                    setQ('');
+                    setCinemaSearchResults([]);
+                  }}
+                >
+                  {c.name}
+                  {(c as any).cities?.name && (
+                    <span style={{ marginLeft: '4px', opacity: 0.6, fontSize: '0.75em' }}>
+                      · {(c as any).cities.name}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Cinema/venue chips — shown only when a city is selected and has cinemas */}
           {cinemas.length > 0 && (
             <div className="filters-row" style={{ marginTop: '8px', flexWrap: 'wrap' }}>
@@ -299,7 +349,7 @@ export default function HomeClient({
       </section>
 
       {/* MOVIES */}
-      <section style={{ paddingBottom: '32px' }}>
+      <section id="cartelera" style={{ paddingBottom: '32px' }}>
         <div className="container">
           <div className="section-header">
             <h2 className="section-title">
